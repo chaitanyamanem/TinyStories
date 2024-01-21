@@ -2,12 +2,13 @@ from model import Model
 import torch
 from torch import nn
 from dataset import CharDataset
-from tinystories_dataset import getTrainDataLoader, getValDataLoader, getVocabSize
+from tinystories_dataset import TinyStories
 from torch.utils.data.dataloader import DataLoader
 import argparse
 from tqdm import tqdm
 import pickle
 import os
+import wandb
 
 
 class AverageMeter:
@@ -33,7 +34,7 @@ class AverageMeter:
         return self.avg
 
 class EarlyStopping:
-    def __init__(self, patience=3, delta=0, mode='min'):
+    def __init__(self, patience=0, delta=0, mode='min'):
         self.best_val = float("inf")
         self.patience = patience
         self.delta = delta
@@ -51,10 +52,21 @@ class EarlyStopping:
                 self.msg = f"Training Not improved for the conjugutive step {self.counter}"
         else:
             raise Exception(f"given mode: `{self.mode}` not valid")
-        return True if self.counter >= self.patience else False, self.msg
+        return True if self.counter > self.patience else False, self.msg
         
 
 
+class Dataset:
+    def __init__(self, dataloader):
+        self.dataloader = dataloader
+        self.iterator = iter(self.dataloader)
+    def getBatch(self):
+        try:
+            batch = next(self.iterator)
+        except:
+            self.iterator = iter(self.dataloader)
+            batch = next(self.iterator)
+        return batch
 
 
 
@@ -62,7 +74,9 @@ class EarlyStopping:
 ## training function
 def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 1, 
                max_iters = None, val_data = None, callback=None, model_save_path=None):
+    
     model.train()
+    dataset = Dataset(dataloader)
     total_steps = max_iters if max_iters is not None else len(dataloader)
     train_bar = tqdm(total=total_steps, desc='Train Step', position=0)
     train_loss = AverageMeter(name="train_loss")
@@ -70,9 +84,10 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 
     history = {'train_loss':[], 'val_loss':[]}
     stop_training = False
 
-    for batch, data in enumerate(dataloader):
-        if (max_iters is not None and batch > max_iters) or stop_training:
-            break        
+    for batch in range(total_steps):
+        if batch > total_steps or stop_training:
+            break
+        data = dataset.getBatch()
         X, y = data["inputs"].to(device), data["targets"].to(device)
         pred = model(X)
         loss = loss_fn(torch.permute(pred, (0,-1,-2)), y)       
@@ -80,7 +95,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 
         
 
         ## Train and test evaluation
-        if (batch) % 100 == 0:            
+        if (batch) % 5000 == 0:            
             # Training loss
             train_loss.update(loss.item(), X.shape[0])
             history['train_loss'].append(train_loss.value())
@@ -91,6 +106,8 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 
             stop_training, msg = callback.check(val_loss.value())            
             # save the model
             torch.save(model, model_save_path)
+            ## Log on wandb
+            wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
                 
         #backpropagation
         loss.backward()
@@ -150,21 +167,28 @@ if __name__ == '__main__':
     model_save_path = args.model_save_path
     max_iters = args.max_iters
     device = args.device
+    
 
 
 
     ## configuration settings
     class Config:
-        def __init__(self):
+        def __init__(self):            
             self.embedding_dim = 512            
-            self.head_size = 0
-            self.block_size = 512 #context length
-            self.vocab_size = 0
-            self.epochs = 2
+            self.context_length = 1024 #context length
+            self.vocab_size = 4096
+            self.epochs = 1
             self.n_heads = 8
+            self.head_size = int(self.embedding_dim // self.n_heads)
             self.n_blocks = 8 #number of layers
             self.batch_size = 4
-            self.grad_accumulation_steps = 16
+            self.grad_accumulation_steps = 32
+            self.learning_rate=3e-4
+            self.total_params = 0
+            self.tokenizer_path = "saved_artifacts/tokenizers"
+
+        
+
 
     config = Config()
 
@@ -177,22 +201,33 @@ if __name__ == '__main__':
     #                                           path="saved_artifacts/datasets/train_data")
     # _, val_data_loader = getValDataLoader(batch_size=config.batch_size, from_disk=True,
     #                                       path="saved_artifacts/datasets/val_data")
-    _, train_data_loader = getTrainDataLoader(batch_size=config.batch_size, block_size=512, subset_size=2000)
-    _, val_data_loader = getValDataLoader(batch_size=config.batch_size, block_size=512, subset_size=1000)     
-
-    ## change required configuration settings
-    config.vocab_size = getVocabSize()
-    config.head_size = config.embedding_dim // config.n_heads
+    print("------Beginning the data preparation----")
+    tinystories = TinyStories(config.vocab_size, config.context_length, config.tokenizer_path)
+    _, train_data_loader = tinystories.getTrainDataLoader(batch_size=config.batch_size)
+    _, val_data_loader = tinystories.getValDataLoader(batch_size=config.batch_size) 
+    print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
+    print("------End of data preparation----")    
 
     ## create the model
-    model = Model(config.vocab_size, config.embedding_dim, config.block_size, 
+    model = Model(config.vocab_size, config.embedding_dim, config.context_length, 
                   config.head_size, config.n_heads, config.n_blocks)
     model = model.to(device)
-    ## Trainign loop
+    ## Log Trainable parameters
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    config.total_params = total_params
+    print(f"\n#######Total parameter of the model: {total_params * 1e-6}")
+
+    ## intiate the wandb logging
+    run = wandb.init(
+        project = "PittaKadhalu",
+        config = config.__dict__
+    )
+
+    ## Trainign configuration
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-    early_stopping = EarlyStopping(patience=5, mode='min')
-    ## Train the data
+    optimizer = torch.optim.AdamW(model.parameters(), lr = config.learning_rate)
+    early_stopping = EarlyStopping(patience=0, mode='min')
+    ## Train the model
     
     # for t in range(config.epochs):
     print(f"\n Training \n-------------------------------")

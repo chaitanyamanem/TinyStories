@@ -10,7 +10,9 @@ class Head(nn.Module):
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.key = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
-        self.tril = torch.tril(torch.ones(block_size, block_size)).to("cuda")   
+        #self.tril = torch.tril(torch.ones(block_size, block_size)).to("cuda")
+        self.register_buffer("bias", torch.tril(torch.ones(block_size, block_size))
+                                        .view(block_size, block_size))   
         self.dropout = nn.Dropout(0.2)     
         
     def forward(self,X,y=None):
@@ -19,7 +21,7 @@ class Head(nn.Module):
         k = self.key(X)
         v = self.value(X)
         wei = q @ k.transpose(-2, -1) / np.sqrt(k.shape[-1])
-        wei = wei.masked_fill(self.tril[:T,:T]==0, float('-inf'))
+        wei = wei.masked_fill(self.bias[:T,:T] ==0, float('-inf'))
         wei = torch.softmax(wei, axis=-1)
         wei = self.dropout(wei)
         out = wei @ v       

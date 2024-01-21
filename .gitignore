@@ -1,6 +1,7 @@
 
 # Directories
 saved_artifacts/
+wandb/
 
 # arrow files
 *.arrow
