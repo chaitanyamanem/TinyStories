@@ -161,11 +161,14 @@ if __name__ == '__main__':
                         help="enter the the path to save the model with .pt extension")
     parser.add_argument('--max_iters', dest="max_iters", type=int, required=False,
                         help="maximum iteration of a model")
+    parser.add_argument('--base_model_path', dest="base_model_path", type=str, required=False, default='NA',
+                        help="existign model to train on")
     parser.add_argument('--device', dest="device", type=str, required=False, default='cuda',
-                        help="model to run on the device")      
+                        help="model to run on the device")         
     args = parser.parse_args()
     model_save_path = args.model_save_path
     max_iters = args.max_iters
+    base_model_path = args.base_model_path
     device = args.device
     
 
@@ -208,10 +211,14 @@ if __name__ == '__main__':
     print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
     print("------End of data preparation----")    
 
-    ## create the model
-    model = Model(config.vocab_size, config.embedding_dim, config.context_length, 
-                  config.head_size, config.n_heads, config.n_blocks)
+    if base_model_path == 'NA':
+        ## create the model
+        model = Model(config.vocab_size, config.embedding_dim, config.context_length, 
+                    config.head_size, config.n_heads, config.n_blocks)
+    else:
+        model = torch.load(base_model_path)
     model = model.to(device)
+    
     ## Log Trainable parameters
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     config.total_params = total_params
@@ -236,7 +243,7 @@ if __name__ == '__main__':
                          model_save_path=model_save_path)
     #test_loop(val_data_loader, model, loss_fn)
     print("Done!")
-    #torch.save(model, model_save_path)
+    torch.save(model, model_save_path)
     loss_data_save_path =  model_save_path[:model_save_path.rfind('/')]    
     with open(os.path.join(loss_data_save_path,"loss_data.pkl"), 'wb') as f:
         pickle.dump(history, f)
