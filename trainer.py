@@ -46,6 +46,7 @@ class EarlyStopping:
         if self.mode == 'min':
             if metric_val <= self.best_val:
                 self.best_val = metric_val
+                self.counter = 0
                 self.msg = "Training improved"
             else:
                 self.counter += 1
@@ -185,8 +186,8 @@ if __name__ == '__main__':
             self.head_size = int(self.embedding_dim // self.n_heads)
             self.n_blocks = 8 #number of layers
             self.batch_size = 4
-            self.grad_accumulation_steps = 32
-            self.learning_rate=3e-4
+            self.grad_accumulation_steps = 128
+            self.learning_rate=5e-4
             self.total_params = 0
             self.tokenizer_path = "saved_artifacts/tokenizers"
 
@@ -232,8 +233,8 @@ if __name__ == '__main__':
 
     ## Trainign configuration
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr = config.learning_rate)
-    early_stopping = EarlyStopping(patience=0, mode='min')
+    optimizer = torch.optim.AdamW(model.parameters(), lr = config.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
+    early_stopping = EarlyStopping(patience=2, mode='min')
     ## Train the model
     
     # for t in range(config.epochs):
