@@ -177,23 +177,20 @@ if __name__ == '__main__':
 
     ## configuration settings
     class Config:
-        def __init__(self):            
-            self.embedding_dim = 512            
-            self.context_length = 1024 #context length
-            self.vocab_size = 4096
-            self.epochs = 1
-            self.n_heads = 8
-            self.head_size = int(self.embedding_dim // self.n_heads)
-            self.n_blocks = 8 #number of layers
-            self.batch_size = 4
-            self.grad_accumulation_steps = 128
-            self.learning_rate=5e-4
-            self.total_params = 0
-            self.tokenizer_path = "saved_artifacts/tokenizers"
-
-        
-
-
+        vocab_size = 4096
+        dim = 552
+        n_heads = 12
+        head_size = dim // n_heads
+        n_layers = 12
+        n_kv_heads = 3
+        seq_len = 1024
+        multiple_of = 256                
+        batch_size = 8
+        grad_accumulation_steps = 128
+        learning_rate=5e-4
+        total_params = 0
+        tokenizer_path = "saved_artifacts/tokenizers"
+            
     config = Config()
 
 
@@ -206,16 +203,15 @@ if __name__ == '__main__':
     # _, val_data_loader = getValDataLoader(batch_size=config.batch_size, from_disk=True,
     #                                       path="saved_artifacts/datasets/val_data")
     print("------Beginning the data preparation----")
-    tinystories = TinyStories(config.vocab_size, config.context_length, config.tokenizer_path)
-    _, train_data_loader = tinystories.getTrainDataLoader(batch_size=config.batch_size)
-    _, val_data_loader = tinystories.getValDataLoader(batch_size=config.batch_size) 
+    tinystories = TinyStories(config.vocab_size, config.seq_len, config.tokenizer_path)
+    _, train_data_loader = tinystories.getTrainDataLoader(batch_size=config.batch_size, subset_size=5000)
+    _, val_data_loader = tinystories.getValDataLoader(batch_size=config.batch_size, subset_size=2500) 
     print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
     print("------End of data preparation----")    
 
     if base_model_path == 'NA':
         ## create the model
-        model = Model(config.vocab_size, config.embedding_dim, config.context_length, 
-                    config.head_size, config.n_heads, config.n_blocks)
+        model = Model(config)
     else:
         model = torch.load(base_model_path)
     model = model.to(device)
@@ -234,7 +230,7 @@ if __name__ == '__main__':
     ## Trainign configuration
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr = config.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
-    early_stopping = EarlyStopping(patience=2, mode='min')
+    early_stopping = EarlyStopping(patience=3, mode='min')
     ## Train the model
     
     # for t in range(config.epochs):
