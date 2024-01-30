@@ -185,7 +185,7 @@ if __name__ == '__main__':
         n_kv_heads = 3
         seq_len = 1024
         multiple_of = 256                
-        batch_size = 8
+        batch_size = 4
         grad_accumulation_steps = 128
         learning_rate=5e-4
         total_params = 0

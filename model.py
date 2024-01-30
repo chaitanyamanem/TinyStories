@@ -4,7 +4,6 @@ import numpy as np
 
 
 
-
 class RoPE(nn.Module):
     def __init__(self,config):
         super().__init__()
@@ -32,7 +31,7 @@ class RoPE(nn.Module):
     def forward(self, x):
         """ assumes x in the format of """
         d  = x.shape[-1]
-        print(f"shapes in RoPE in oredr x, : {x.shape, self.cos_mthetas.shape},d:{d}")
+        
         assert d == self.d
         
         x = self.cos_mthetas * x + self.sin_mthetas * torch.cat([-1 * x[:,:,:,self.d//2:],x[:,:,:,:self.d//2]], axis=-1)
@@ -67,7 +66,7 @@ class MultiHeadAttention(nn.Module):
         q = self.query(x).view(b,t,self.config.n_heads,self.config.head_size)
         k = self.key(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
         v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
-        print(f"Shapes of Q, K, V: {q.shape, k.shape, v.shape}")
+        
         
         ## Add rotary embeddings        
         q = self.rope(q.permute(0,2,1,3)).permute(0,2,1,3)
@@ -76,7 +75,7 @@ class MultiHeadAttention(nn.Module):
         ##GQA 
         k = repeat_kv(k,self.n_rep)
         v = repeat_kv(v,self.n_rep)
-        print(f"Shapes of Q, K, V: {q.shape, k.shape, v.shape}")
+        
         # make heads into a batch dimension
         q = q.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         k = k.transpose(1, 2)
