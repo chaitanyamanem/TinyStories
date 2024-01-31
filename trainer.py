@@ -185,8 +185,8 @@ if __name__ == '__main__':
         n_kv_heads = 3
         seq_len = 1024
         multiple_of = 256                
-        batch_size = 4
-        grad_accumulation_steps = 128
+        batch_size = 4  
+        grad_accumulation_steps = 32
         learning_rate=5e-4
         total_params = 0
         tokenizer_path = "saved_artifacts/tokenizers"
@@ -204,8 +204,8 @@ if __name__ == '__main__':
     #                                       path="saved_artifacts/datasets/val_data")
     print("------Beginning the data preparation----")
     tinystories = TinyStories(config.vocab_size, config.seq_len, config.tokenizer_path)
-    _, train_data_loader = tinystories.getTrainDataLoader(batch_size=config.batch_size, subset_size=5000)
-    _, val_data_loader = tinystories.getValDataLoader(batch_size=config.batch_size, subset_size=2500) 
+    _, train_data_loader = tinystories.getTrainDataLoader(batch_size=config.batch_size)#, subset_size=5000)
+    _, val_data_loader = tinystories.getValDataLoader(batch_size=config.batch_size)#, subset_size=2500) 
     print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
     print("------End of data preparation----")    
 
@@ -223,7 +223,7 @@ if __name__ == '__main__':
 
     ## intiate the wandb logging
     run = wandb.init(
-        project = "PittaKadhalu",
+        project = "PittaKadhalu-llama2",
         config = config.__dict__
     )
 
