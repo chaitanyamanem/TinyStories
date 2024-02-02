@@ -9,6 +9,7 @@ from tqdm import tqdm
 import pickle
 import os
 import wandb
+from accelerate import Accelerator
 
 
 class AverageMeter:
@@ -68,12 +69,14 @@ class Dataset:
             self.iterator = iter(self.dataloader)
             batch = next(self.iterator)
         return batch
+    
+
 
 
 
 
 ## training function
-def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 1, val_steps = 5000,
+def train_loop(dataloader, model, loss_fn, optimizer, val_steps = 5000,
                max_iters = None, val_data = None, callback=None, model_save_path=None):
     
     model.train()
@@ -86,37 +89,39 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 
     stop_training = False
 
     for batch in range(total_steps):
-        if batch > total_steps or stop_training:
-            break
-        data = dataset.getBatch()
-        X, y = data["inputs"].to(device), data["targets"].to(device)
-        pred = model(X)
-        loss = loss_fn(torch.permute(pred, (0,-1,-2)), y)       
+        with accelerator.accumulate(model):
+            if batch > total_steps or stop_training:
+                break
+            data = dataset.getBatch()
+            X, y = data["inputs"].to(device), data["targets"].to(device)
+            pred = model(X)
+            loss = loss_fn(torch.permute(pred, (0,-1,-2)), y)       
 
-        
+            
 
-        ## Train and test evaluation
-        if (batch) % val_steps == 0:            
-            # Training loss
-            train_loss.update(loss.item(), X.shape[0])
-            history['train_loss'].append(train_loss.value())
-            # Validation loss
-            test_loop(val_data, model, loss_fn, val_loss)
-            history['val_loss'].append(val_loss.value())
-            train_bar.write(f"Step:{batch} {train_loss}, {val_loss}")            
-            stop_training, msg = callback.check(val_loss.value())            
-            # save the model
-            torch.save(model, model_save_path)
-            ## Log on wandb
-            wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
-                
-        #backpropagation
-        loss.backward()
-        if ((batch + 1) % grad_accumulation_steps == 0) or (batch + 1) == total_steps:            
+            ## Train and test evaluation
+            if (batch) % val_steps == 0:            
+                # Training loss
+                train_loss.update(loss.item(), X.shape[0])
+                history['train_loss'].append(train_loss.value())
+                # Validation loss
+                test_loop(val_data, model, loss_fn, val_loss)
+                history['val_loss'].append(val_loss.value())
+                train_bar.write(f"Step:{batch} {train_loss}, {val_loss}")            
+                stop_training, msg = callback.check(val_loss.value())            
+                # save the model
+                model = accelerator.unwrap_model(model)
+                state_dict = model.state_dict()
+                accelerator.save(state_dict, os.path.join(model_save_path,"model_checkpoint.pkl"))
+                ## Log on wandb
+                wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
+                    
+            #backpropagation
+            accelerator.backward(loss)               
             optimizer.step()
             optimizer.zero_grad()
 
-        train_bar.update(1)
+            train_bar.update(1)
 
     return history
 
@@ -164,8 +169,6 @@ if __name__ == '__main__':
                         help="maximum iteration of a model")
     parser.add_argument('--base_model_path', dest="base_model_path", type=str, required=False, default='NA',
                         help="existign model to train on")
-    parser.add_argument('--device', dest="device", type=str, required=False, default='cuda',
-                        help="model to run on the device")
     parser.add_argument('--val_steps', dest="val_steps", type=int, required=False, default=5000,
                         help="Numbers of steps after vlaidation metrcis calculated")
     parser.add_argument('--n_train_examples', dest="n_train_examples", type=int, required=False, default=-1,
@@ -180,8 +183,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     model_save_path = args.model_save_path
     max_iters = args.max_iters
-    base_model_path = args.base_model_path
-    device = args.device
+    base_model_path = args.base_model_path    
     val_steps = args.val_steps
     n_train_examples = args.n_train_examples
     n_val_examples = args.n_val_examples
@@ -231,7 +233,7 @@ if __name__ == '__main__':
         model = Model(config)
     else:
         model = torch.load(base_model_path)
-    model = model.to(device)
+    
     
     ## Log Trainable parameters
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -256,6 +258,14 @@ if __name__ == '__main__':
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     ## Train the model
+    ## Prepare model to work on multiple GPUs / Nodes
+    
+    accelerator = Accelerator(gradient_accumulation_steps=config.grad_accumulation_steps)
+    device = accelerator.device
+
+    model, optimizer = accelerator.prepare(
+          model, optimizer
+      )
     
     # for t in range(config.epochs):
     print(f"\n Training \n-------------------------------")
@@ -265,11 +275,13 @@ if __name__ == '__main__':
     #test_loop(val_data_loader, model, loss_fn)
     print("Done!")
     ## Save model and optimizer state dict
-    root_save_path =  model_save_path[:model_save_path.rfind('/')]    
-    torch.save(model, model_save_path) ## savign after last update
-    torch.save({'optimizer_state_dict': optimizer.state_dict()},os.path.join(root_save_path,'checkpoint.pth'))
+    model = accelerator.unwrap_model(model)
+    accelerator.save(model, os.path.join(model_save_path, "full_model.pt")) ## savign after last update with full model graph
+
+    optimizer = accelerator.unwrap_model(optimizer)
+    accelerator.save(optimizer.state_dict(),os.path.join(model_save_path,'optimizer_checkpoint.pkl'))
     
-    with open(os.path.join(root_save_path,"loss_data.pkl"), 'wb') as f:
+    with open(os.path.join(model_save_path,"loss_data.pkl"), 'wb') as f:
         pickle.dump(history, f)
     # save the model
     
