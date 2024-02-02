@@ -76,13 +76,13 @@ class Dataset:
 
 
 ## training function
-def train_loop(dataloader, model, loss_fn, optimizer, val_steps = 5000,
+def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, val_steps = 5000,
                max_iters = None, val_data = None, callback=None, model_save_path=None):
     
     model.train()
     dataset = Dataset(dataloader)
     total_steps = max_iters if max_iters is not None else len(dataloader)
-    train_bar = tqdm(total=total_steps, desc='Train Step', position=0)
+    train_bar = tqdm(total=total_steps, desc='Train Step', position=0, disable=not accelerator.is_local_main_process)
     train_loss = AverageMeter(name="train_loss")
     val_loss = AverageMeter(name="val_loss")
     history = {'train_loss':[], 'val_loss':[]}
@@ -95,12 +95,12 @@ def train_loop(dataloader, model, loss_fn, optimizer, val_steps = 5000,
             data = dataset.getBatch()
             X, y = data["inputs"].to(device), data["targets"].to(device)
             pred = model(X)
-            loss = loss_fn(torch.permute(pred, (0,-1,-2)), y)       
-
+            loss = loss_fn(torch.permute(pred, (0,-1,-2)), y)
             
+                        
 
             ## Train and test evaluation
-            if (batch) % val_steps == 0:            
+            if (batch) % val_steps == 0 and accelerator.is_main_process:            
                 # Training loss
                 train_loss.update(loss.item(), X.shape[0])
                 history['train_loss'].append(train_loss.value())
@@ -117,6 +117,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, val_steps = 5000,
                 wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
                     
             #backpropagation
+            loss = loss / grad_accumulation_steps  ## Normalize the loss
             accelerator.backward(loss)               
             optimizer.step()
             optimizer.zero_grad()
@@ -179,6 +180,8 @@ if __name__ == '__main__':
                         help="path of the tokenizer")
     parser.add_argument('--wandb_project', dest="wandb_project", type=str, required=False, default="test_project",
                         help="wandb project name")
+    parser.add_argument('--batch_size', dest="batch_size", type=int, required=False, default=4,
+                        help="batch size (per process)")
     
     args = parser.parse_args()
     model_save_path = args.model_save_path
@@ -189,6 +192,7 @@ if __name__ == '__main__':
     n_val_examples = args.n_val_examples
     tokenizer_path = args.tokenizer_path
     wandb_project = args.wandb_project
+    batch_size = args.batch_size
 
     
 
@@ -204,14 +208,18 @@ if __name__ == '__main__':
         n_kv_heads = 3
         seq_len = 1024
         multiple_of = 256                
-        batch_size = 4  
-        grad_accumulation_steps = 32
+        batch_size = batch_size 
+        global_batch_size = 100000 # number of tokens per update
+        grad_accumulation_steps = int(global_batch_size/(seq_len * batch_size))
         learning_rate=5e-4
         total_params = 0
         tokenizer_path = tokenizer_path
             
     config = Config()
+    ## accelerator for distributed training
 
+    accelerator = Accelerator(gradient_accumulation_steps=config.grad_accumulation_steps)
+    device = accelerator.device
 
 
 
@@ -221,12 +229,12 @@ if __name__ == '__main__':
     #                                           path="saved_artifacts/datasets/train_data")
     # _, val_data_loader = getValDataLoader(batch_size=config.batch_size, from_disk=True,
     #                                       path="saved_artifacts/datasets/val_data")
-    print("------Beginning the data preparation----")
+    accelerator.print("------Beginning the data preparation----")
     tinystories = TinyStories(config.vocab_size, config.seq_len, config.tokenizer_path)
-    _, train_data_loader = tinystories.getTrainDataLoader(batch_size=config.batch_size, subset_size=n_train_examples)
-    _, val_data_loader = tinystories.getValDataLoader(batch_size=config.batch_size, subset_size=n_val_examples) 
-    print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
-    print("------End of data preparation----")    
+    _, train_data_loader = tinystories.getTrainDataLoader(accelerator, batch_size=config.batch_size, subset_size=n_train_examples)
+    _, val_data_loader = tinystories.getValDataLoader(accelerator, batch_size=config.batch_size, subset_size=n_val_examples) 
+    accelerator.print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
+    accelerator.print("------End of data preparation----")    
 
     if base_model_path == 'NA':
         ## create the model
@@ -238,7 +246,7 @@ if __name__ == '__main__':
     ## Log Trainable parameters
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     config.total_params = total_params
-    print(f"\n#######Total parameter of the model: {total_params * 1e-6}")
+    accelerator.print(f"\n#######Total parameter of the model: {total_params * 1e-6}")
 
     ## intiate the wandb logging
     run = wandb.init(
@@ -260,21 +268,21 @@ if __name__ == '__main__':
     ## Train the model
     ## Prepare model to work on multiple GPUs / Nodes
     
-    accelerator = Accelerator(gradient_accumulation_steps=config.grad_accumulation_steps)
-    device = accelerator.device
+    
 
     model, optimizer = accelerator.prepare(
           model, optimizer
       )
     
     # for t in range(config.epochs):
-    print(f"\n Training \n-------------------------------")
+    accelerator.print(f"\n Training \n-------------------------------")
     history = train_loop(train_data_loader, model, loss_fn, optimizer, config.grad_accumulation_steps, 
                          val_steps=val_steps, max_iters = max_iters, val_data = val_data_loader, callback = early_stopping,
                          model_save_path=model_save_path)
     #test_loop(val_data_loader, model, loss_fn)
-    print("Done!")
+    accelerator.print("Done!")
     ## Save model and optimizer state dict
+    accelerator.wait_for_everyone()
     model = accelerator.unwrap_model(model)
     accelerator.save(model, os.path.join(model_save_path, "full_model.pt")) ## savign after last update with full model graph
 

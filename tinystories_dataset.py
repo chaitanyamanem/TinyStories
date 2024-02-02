@@ -2,6 +2,7 @@ from datasets import load_dataset, load_from_disk
 from torch.utils.data import DataLoader
 import sentencepiece as spm
 import os
+from accelerate import Accelerator
 
 class TinyStories:
     def __init__(self, vocab_size, context_length, tokenizers_path):
@@ -28,7 +29,7 @@ class TinyStories:
 
 
 
-    def getTrainDataLoader(self, batch_size = 64, from_disk=False, 
+    def getTrainDataLoader(self, accelerator, batch_size = 64, from_disk=False, 
                         path=None, subset_size=-1, save_to_disk=False, save_path=None):
         if from_disk:
             if path is None:
@@ -44,12 +45,13 @@ class TinyStories:
                     raise Exception("sample size should be a positive number larger than zero")
                 dataset = dataset.select(range(subset_size))
             
-            dataset = dataset.map(
-                self.process_rows_func,                
-                batched=True,
-                num_proc=4,
-                remove_columns=dataset.column_names    
-            )
+            with accelerator.main_process_first():
+                dataset = dataset.map(
+                    self.process_rows_func,                
+                    batched=True,
+                    num_proc=4,
+                    remove_columns=dataset.column_names    
+                )
             
             if save_to_disk:
                 if save_path is None: raise Exception("save path can't be None")
@@ -64,7 +66,7 @@ class TinyStories:
     
     
 
-    def getValDataLoader(self, batch_size = 64, from_disk=False, 
+    def getValDataLoader(self, accelerator, batch_size = 64, from_disk=False, 
                         path=None, subset_size=-1, save_to_disk=False, save_path=None):
         if from_disk:
             if path is None:
@@ -80,12 +82,13 @@ class TinyStories:
                     raise Exception("sample size should be a positive number larger than zero")
                 dataset = dataset.select(range(subset_size))
             
-            dataset = dataset.map(
-                self.process_rows_func,                
-                batched=True,
-                num_proc=4,
-                remove_columns=dataset.column_names    
-            )
+            with accelerator.main_process_first():
+                dataset = dataset.map(
+                    self.process_rows_func,                
+                    batched=True,
+                    num_proc=4,
+                    remove_columns=dataset.column_names    
+                )
             
             if save_to_disk:
                 if save_path is None: raise Exception("save path can't be None")
