@@ -114,7 +114,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
                 state_dict = model.state_dict()
                 accelerator.save(state_dict, os.path.join(model_save_path,"model_checkpoint.pkl"))
                 ## Log on wandb
-                wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
+                #wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
                     
             #backpropagation
             loss = loss / grad_accumulation_steps  ## Normalize the loss
@@ -249,10 +249,10 @@ if __name__ == '__main__':
     accelerator.print(f"\n#######Total parameter of the model: {total_params * 1e-6}")
 
     ## intiate the wandb logging
-    run = wandb.init(
-        project = wandb_project,
-        config = config.__dict__
-    )
+    # run = wandb.init(
+    #     project = wandb_project,
+    #     config = config.__dict__
+    # )
 
     ## Trainign configuration
     loss_fn = nn.CrossEntropyLoss()
@@ -269,7 +269,7 @@ if __name__ == '__main__':
     ## Prepare model to work on multiple GPUs / Nodes
     
     
-
+    accelerator.print(f"Preparing model and optimizer")
     model, optimizer = accelerator.prepare(
           model, optimizer
       )
