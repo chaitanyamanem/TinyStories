@@ -176,6 +176,8 @@ if __name__ == '__main__':
                         help="path of the tokenizer")
     parser.add_argument('--wandb_project', dest="wandb_project", type=str, required=False, default="test_project",
                         help="wandb project name")
+    parser.add_argument('--batch_size', dest="batch_size", type=int, required=False, default=4,
+                        help="batch_size")
     
     args = parser.parse_args()
     model_save_path = args.model_save_path
@@ -187,6 +189,7 @@ if __name__ == '__main__':
     n_val_examples = args.n_val_examples
     tokenizer_path = args.tokenizer_path
     wandb_project = args.wandb_project
+    batch_size = args.batch_size
 
     
 
@@ -202,8 +205,9 @@ if __name__ == '__main__':
         n_kv_heads = 3
         seq_len = 1024
         multiple_of = 256                
-        batch_size = 4  
-        grad_accumulation_steps = 32
+        batch_size = batch_size  
+        global_batch_size = 100000
+        grad_accumulation_steps = int(global_batch_size / (batch_size * seq_len))
         learning_rate=5e-4
         total_params = 0
         tokenizer_path = tokenizer_path

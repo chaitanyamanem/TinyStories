@@ -1,6 +1,7 @@
 
 # Directories
-saved_artifacts/
+**/saved_artifacts/datasets
+**/saved_artifacts/models
 wandb/
 
 # arrow files
