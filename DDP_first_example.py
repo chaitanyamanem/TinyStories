@@ -125,4 +125,8 @@ if __name__ == "__main__":
     n_gpus = torch.cuda.device_count()
     assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
     world_size = n_gpus
-    run_demo(demo_basic, world_size)    
+    mp.spawn(demo_basic,
+             args=(world_size,),
+             nprocs=world_size,
+             join=True)
+    #run_demo(demo_basic, world_size)    
