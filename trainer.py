@@ -105,7 +105,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
                 train_loss.update(loss.item(), X.shape[0])
                 history['train_loss'].append(train_loss.value())
                 # Validation loss
-                test_loop(val_data, model, loss_fn, val_loss)
+                test_loop(val_data, accelerator.unwrap_model(model), loss_fn, val_loss)
                 history['val_loss'].append(val_loss.value())
                 train_bar.write(f"Step:{batch} {train_loss}, {val_loss}")            
                 stop_training, msg = callback.check(val_loss.value())            
@@ -116,6 +116,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
                 ## Log on wandb
                 #wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
                     
+            accelerator.wait_for_everyone()
             #backpropagation
             loss = loss / grad_accumulation_steps  ## Normalize the loss
             accelerator.backward(loss)               
@@ -132,7 +133,9 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
 def test_loop(dataloader, model, loss_fn, val_loss):
     model.eval()
     val_loss.reset()    
-    num_batches = len(dataloader)    
+    num_batches = len(dataloader) 
+    device = accelerator.process_index
+    model = model.to(device)
     
     test_bar = tqdm(total=num_batches, desc='val loss step', position=1, leave=False) 
     for i, data in enumerate(dataloader):        
@@ -233,7 +236,7 @@ if __name__ == '__main__':
     tinystories = TinyStories(config.vocab_size, config.seq_len, config.tokenizer_path)
     _, train_data_loader = tinystories.getTrainDataLoader(accelerator, batch_size=config.batch_size, subset_size=n_train_examples)
     _, val_data_loader = tinystories.getValDataLoader(accelerator, batch_size=config.batch_size, subset_size=n_val_examples) 
-    accelerator.print(f"\n#########Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
+    accelerator.print(f"\n#########GPU{accelerator.process_index}: Length of the training data:{len(train_data_loader)}, validation data:{len(val_data_loader)}")    
     accelerator.print("------End of data preparation----")    
 
     if base_model_path == 'NA':
@@ -276,13 +279,15 @@ if __name__ == '__main__':
     
     # for t in range(config.epochs):
     accelerator.print(f"\n Training \n-------------------------------")
+    print(f"Startign for GPU{accelerator.process_index}")
     history = train_loop(train_data_loader, model, loss_fn, optimizer, config.grad_accumulation_steps, 
                          val_steps=val_steps, max_iters = max_iters, val_data = val_data_loader, callback = early_stopping,
                          model_save_path=model_save_path)
     #test_loop(val_data_loader, model, loss_fn)
-    accelerator.print("Done!")
+    accelerator.print("Done! - Wait for everyone")
     ## Save model and optimizer state dict
     accelerator.wait_for_everyone()
+    accelerator.print("All Arrived!")
     model = accelerator.unwrap_model(model)
     accelerator.save(model, os.path.join(model_save_path, "full_model.pt")) ## savign after last update with full model graph
 
