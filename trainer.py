@@ -82,7 +82,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
     model.train()
     dataset = Dataset(dataloader)
     total_steps = max_iters if max_iters is not None else len(dataloader)
-    train_bar = tqdm(total=total_steps, desc='Train Step', position=0, disable=not accelerator.is_local_main_process)
+    #train_bar = tqdm(total=total_steps, desc='Train Step', position=0, disable=not accelerator.is_local_main_process)
     train_loss = AverageMeter(name="train_loss")
     val_loss = AverageMeter(name="val_loss")
     history = {'train_loss':[], 'val_loss':[]}
@@ -96,6 +96,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
             X, y = data["inputs"].to(device), data["targets"].to(device)
             pred = model(X)
             loss = loss_fn(torch.permute(pred, (0,-1,-2)), y)
+            print(f"GPU{accelerator.process_index}: Training loss is {loss}")
             
                         
 
@@ -107,7 +108,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
                 # Validation loss
                 test_loop(val_data, accelerator.unwrap_model(model), loss_fn, val_loss)
                 history['val_loss'].append(val_loss.value())
-                train_bar.write(f"Step:{batch} {train_loss}, {val_loss}")            
+                #train_bar.write(f"Step:{batch} {train_loss}, {val_loss}")            
                 stop_training, msg = callback.check(val_loss.value())            
                 # save the model
                 model = accelerator.unwrap_model(model)
@@ -123,7 +124,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps, v
             optimizer.step()
             optimizer.zero_grad()
 
-            train_bar.update(1)
+            #train_bar.update(1)
 
     return history
 
