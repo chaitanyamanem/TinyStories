@@ -1,4 +1,5 @@
-
+# orpheus files
+slurm*
 # Directories
 saved_artifacts/datasets/
 saved_artifacts/models/
