@@ -98,9 +98,10 @@ def demo_basic(rank, world_size, dataset, grad_acc_steps):
     #train_bar = tqdm(total=len(train_dataloader), desc='Train Step', position=0, disable = not rank == 0)
     
     for s,(x,y) in enumerate(train_dataloader):
-        model.require_backward_grad_sync = (s + 1) % grad_acc_steps == 0
+        ddp_model.require_backward_grad_sync = (s + 1) % grad_acc_steps == 0
         print(f"GPU{rank}: At step{s+1} weights of w11 and w12 is {model.net1.weight[0,:2]}")
-        x,y = x.to(rank), y.to(rank)        
+        x,y = x.to(rank), y.to(rank) 
+        print(f"GPU{rank}: At step{s+1} inputs shape:{x.shape} inputs{x[:2,:4]}")       
         outputs = ddp_model(x)        
         loss = loss_fn(outputs, y)
         #print(f"Loss on GPU{rank} for STEP{s} is: {loss}")
