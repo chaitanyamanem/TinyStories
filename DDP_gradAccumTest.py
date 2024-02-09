@@ -110,7 +110,7 @@ def demo_basic(rank, world_size, dataset, grad_acc_steps):
             optimizer.step()
             print(f"GPU{rank}: At step{s+1} weights of w11 and w12 is {model.net1.weight[0,:2]}")
             optimizer.zero_grad()
-            print(f"GPU{rank}: At step{s+1} gradients for w11 and w12 is {model.net1.weight.grad[0,:2]}")
+            
         # if rank == 0  and s % 200 == 0:
         #     val_loss = val_loop(ddp_model, test_dataloader, loss_fn, rank)
         #     print(f"***validation*** loss on GPU{rank} for STEP{s} is: {val_loss}")
