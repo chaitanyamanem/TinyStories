@@ -1,15 +1,41 @@
 from datasets import load_dataset, load_from_disk
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 import sentencepiece as spm
 import os
 from accelerate import Accelerator
 
 class TinyStories:
-    def __init__(self, vocab_size, context_length, tokenizers_path):
-        self.vocab_size = vocab_size
-        self.context_length = context_length
-        self.tokenizer_model_path = os.path.join(tokenizers_path,f"tok_{vocab_size}.model")
+    def __init__(self, config):
+        self.vocab_size = config.vocab_size
+        self.context_length = config.seq_len
+        self.batch_size = config.batch_size
+        self.tokenizer_model_path = os.path.join(config.tokenizer_path,f"tok_{config.vocab_size}.model")
         self.tokenizer = spm.SentencePieceProcessor(model_file=self.tokenizer_model_path)
+
+        #build dataset
+        self.dataset = load_dataset("roneneldan/TinyStories")
+        self.train_dataset = self.dataset["train"]
+        self.val_dataset = self.dataset["validation"]
+        if config.n_train_examples != -1:
+            self.train_dataset = self.train_dataset.select(range(config.n_train_examples))
+        if config.n_val_examples != -1:
+            self.val_dataset = self.val_dataset.select(range(config.n_val_examples))
+
+        self.train_dataset = self.train_dataset.map(
+                    self.process_rows_func,                
+                    batched=True,
+                    num_proc=4,
+                    remove_columns=self.train_dataset.column_names    
+                )
+        self.train_dataset.set_format(type='torch', columns=self.train_dataset.column_names)
+
+        self.val_dataset = self.val_dataset.map(
+                    self.process_rows_func,                
+                    batched=True,
+                    num_proc=4,
+                    remove_columns=self.val_dataset.column_names    
+                )
+        self.val_dataset.set_format(type='torch', columns=self.val_dataset.column_names)             
 
     
     def process_rows_func(self,examples):     
@@ -29,75 +55,16 @@ class TinyStories:
 
 
 
-    def getTrainDataLoader(self, accelerator, batch_size = 64, from_disk=False, 
-                        path=None, subset_size=-1, save_to_disk=False, save_path=None):
-        if from_disk:
-            if path is None:
-                raise Exception("To load the dataset from disk, you need to give valid path")
-            reloaded_dataset = load_from_disk(path).with_format("torch")
-            train_loader = DataLoader(reloaded_dataset, batch_size=batch_size)
-            return reloaded_dataset, train_loader
-        else:
-            dataset = load_dataset("roneneldan/TinyStories")
-            dataset = dataset["train"]
-            if subset_size != -1:
-                if subset_size <=0: 
-                    raise Exception("sample size should be a positive number larger than zero")
-                dataset = dataset.select(range(subset_size))
-            
-            with accelerator.main_process_first():
-                dataset = dataset.map(
-                    self.process_rows_func,                
-                    batched=True,
-                    num_proc=4,
-                    remove_columns=dataset.column_names    
-                )
-            
-            if save_to_disk:
-                if save_path is None: raise Exception("save path can't be None")
-                dataset.save_to_disk(save_path)
-                
-            dataset.set_format(type='torch', columns=dataset.column_names)
-            train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-            
-        
-            
-            return dataset, train_loader  
+    def getTrainDataLoader(self, ddp):
+        sampler = DistributedSampler(self.train_dataset) if ddp else None
+        train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, sampler=sampler)
+        return train_loader  
     
     
 
-    def getValDataLoader(self, accelerator, batch_size = 64, from_disk=False, 
-                        path=None, subset_size=-1, save_to_disk=False, save_path=None):
-        if from_disk:
-            if path is None:
-                raise Exception("To load the dataset from disk, you need to give valid path")
-            reloaded_dataset = load_from_disk(path).with_format("torch")
-            val_loader = DataLoader(reloaded_dataset, batch_size=batch_size)
-            return reloaded_dataset, val_loader
-        else:
-            dataset = load_dataset("roneneldan/TinyStories")
-            dataset = dataset["validation"]
-            if subset_size != -1:
-                if subset_size <=0: 
-                    raise Exception("sample size should be a positive number larger than zero")
-                dataset = dataset.select(range(subset_size))
-            
-            with accelerator.main_process_first():
-                dataset = dataset.map(
-                    self.process_rows_func,                
-                    batched=True,
-                    num_proc=4,
-                    remove_columns=dataset.column_names    
-                )
-            
-            if save_to_disk:
-                if save_path is None: raise Exception("save path can't be None")
-                dataset.save_to_disk(save_path)
-                
-            dataset.set_format(type='torch', columns=dataset.column_names)
-            val_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True) 
-        
-            return dataset, val_loader
+    def getValDataLoader(self): 
+        val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=True)    
+        return val_loader
         
     def getVocabSize(self):
         return int(self.tokenizer.vocab_size())

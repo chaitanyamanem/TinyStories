@@ -218,6 +218,9 @@ if __name__ == '__main__':
         learning_rate=5e-4
         total_params = 0
         tokenizer_path = tokenizer_path
+
+
+
             
     config = Config()
     ## accelerator for distributed training
