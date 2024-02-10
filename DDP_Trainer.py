@@ -158,9 +158,9 @@ def getArguments():
         n_val_examples = args.n_val_examples
         max_iters = args.max_iters
             
-    config = Config()
+    #config = Config()
 
-    return config
+    return Config
 
     
 if __name__ == "__main__":
