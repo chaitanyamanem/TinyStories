@@ -5,6 +5,7 @@ import argparse
 import tempfile
 import warnings
 import logging
+import wandb
 from datetime import datetime
 from tqdm import tqdm
 import torch
@@ -59,7 +60,7 @@ class Config:
         self.n_val_examples = args.n_val_examples
         self.max_iters = args.max_iters
         self.loss_check_steps = args.loss_check_steps
-        self.model_save_path = args.model_save_path
+        self.checkpoint_save_path = args.checkpoint_save_path
         self.rank = 0 
 
 class AverageMeter:
@@ -128,9 +129,13 @@ def val_loop(dataloader, model, loss_fn, rank):
     return val_loss_meter.value()
 
 @torch.no_grad
-def save_checkpoint(model, config):
-    model_save_path = os.path.join(config.model_save_path,"model.pt")
-    torch.save(model.state_dict(), model_save_path)
+def save_checkpoint(model, optimizer, val_loss, config):
+    """
+    https://discuss.pytorch.org/t/loading-a-saved-model-for-continue-training/17244
+    """
+    checkpoint_save_path = os.path.join(config.checkpoint_save_path,"checkpoint.pt")
+    state = {'model':model.state_dict(), 'optimizer':optimizer.state_dict(),'val_loss':val_loss}
+    torch.save(state, checkpoint_save_path)
 
 
     
@@ -151,25 +156,37 @@ def train(rank, world_size, dataset, config):
     optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
     ## get the dataloader
     train_dataloader = dataset.getTrainDataLoader(ddp=True)
+    iterator = iter(train_dataloader)
     val_dataloader = dataset.getValDataLoader()
     print(f"Total number of steps in the datset on the GPU:{rank} is {len(train_dataloader)}.")
     ## set the tqdm bar
-    train_bar = tqdm(total=len(train_dataloader), desc='Train Step', position=0, disable = not rank == 0)    
-    for s,batch in enumerate(train_dataloader):        
+    total_steps = config.max_iters if config.max_iters is not None else len(train_dataloader)
+    train_bar = tqdm(total=total_steps, desc='Train Step', position=0, disable = not rank == 0) 
+
+    ## Train for given number of steps
+    for s in range(total_steps):        
         if s > config.max_iters: break ## check the maxiters condition \
 
-        ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0        
-        x,y = batch["inputs"].to(rank), batch["targets"].to(rank)         
-        outputs = ddp_model(x)        
+        ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0
+        ## get one batch of data
+        try:
+            batch = next(iterator)
+        except:
+            iterator = iter(train_dataloader)
+            batch = next(iterator)        
+        x,y = batch["inputs"].to(rank), batch["targets"].to(rank)
+        #forword pass         
+        outputs = ddp_model(x)
+        #loss        
         loss = loss_fn(torch.permute(outputs, (0,-1,-2)), y)
-
+        ## Validation check
         if s % config.loss_check_steps == 0:
-            train_loss_meter.update(loss.item(), x.shape[0])
-            train_bar.write(f"GPU{rank}, step{s+1}: Trian Loss {train_loss_meter.value()}")
+            train_loss_meter.update(loss.item(), x.shape[0])            
             if rank == 0:                    
                 val_loss = val_loop(val_dataloader, ddp_model.module, loss_fn, rank)
-                save_checkpoint(ddp_model.module, config)
-                train_bar.write(f"GPU{rank}, step{s+1}: val_loss is {val_loss}")
+                save_checkpoint(ddp_model.module, optimizer, val_loss, config)
+                train_bar.write(f"GPU{rank}, step{s+1}: train loss:{train_loss_meter.value()} val_loss is {val_loss}")
+                wandb.log({'train/loss':train_loss_meter.value(), 'val/loss':val_loss})
         dist.barrier()
         loss = loss / config.grad_accumulation_steps ## normalizing        
         loss.backward()
@@ -200,7 +217,7 @@ if __name__ == "__main__":
     ## Read commandline arguments
     ### Command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_save_path', dest="model_save_path", type=str, required=True,
+    parser.add_argument('--checkpoint_save_path', dest="checkpoint_save_path", type=str, required=True,
                         help="enter the the path to save the model with .pt extension")
     parser.add_argument('--max_iters', dest="max_iters", type=int, required=False,
                         help="maximum iteration of a model")
@@ -224,6 +241,11 @@ if __name__ == "__main__":
     
     ## Iintialize the datset
     dataset = TinyStories(config)
+    ## Initialize wandb logging
+    run = wandb.init(
+        project = args.wandb_project,
+        config = config.__dict__
+    )
     ## Run the distributed training
     mp.spawn(train,
              args=(n_gpus,dataset,config),
