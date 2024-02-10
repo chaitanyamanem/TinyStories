@@ -57,7 +57,8 @@ class TinyStories:
 
     def getTrainDataLoader(self, ddp):
         sampler = DistributedSampler(self.train_dataset) if ddp else None
-        train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, sampler=sampler)
+        shuffle = True if not ddp else None
+        train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=shuffle, sampler=sampler)
         return train_loader  
     
     
