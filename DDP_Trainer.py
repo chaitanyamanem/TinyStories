@@ -174,8 +174,7 @@ def train(rank, world_size, dataset, config):
     ###############################
     #######  TRAIN LOOP  ##########
     ###############################
-    for s in range(total_steps):        
-        if s > config.max_iters: break ## check the maxiters condition \
+    for s in range(total_steps+1):       
 
         ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0
         ## get one batch of data
@@ -195,7 +194,7 @@ def train(rank, world_size, dataset, config):
             if rank == 0:                    
                 val_loss = val_loop(val_dataloader, ddp_model.module, loss_fn, rank)
                 save_checkpoint(ddp_model.module, optimizer, val_loss, config)
-                train_bar.write(f"GPU{rank}, step{s+1}: train loss:{train_loss_meter.value()} val_loss is {val_loss}")
+                train_bar.write(f"GPU{rank}, step{s}: train loss:{train_loss_meter.value()} val_loss is {val_loss}")
                 wandb.log({'train/loss':train_loss_meter.value(), 'val/loss':val_loss})
         dist.barrier()
         loss = loss / config.grad_accumulation_steps ## normalizing        
