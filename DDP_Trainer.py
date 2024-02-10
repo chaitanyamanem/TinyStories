@@ -116,7 +116,7 @@ def train(rank, world_size, dataset, config):
         x,y = batch["inputs"].to(rank), batch["targets"].to(rank) 
         #print(f"GPU{rank}: At step{s+1} inputs shape:{x.shape} inputs{x[:2,:4]}")       
         outputs = ddp_model(x)        
-        loss = loss_fn(outputs, y)
+        loss = loss_fn(torch.permute(outputs, (0,-1,-2)), y)
         print(f"GPU{rank}, step{s+1}: loss {loss}")
         loss = loss / config.grad_accumulation_steps ## normalizing
         #print(f"Loss on GPU{rank} for STEP{s} is: {loss}")
