@@ -36,6 +36,28 @@ class Dataset:
         if dtype == "test":
             test_loader = DataLoader(TensorDataset(self.X_test,self.y_test), batch_size=self.batch_size, shuffle=False)
             return test_loader
+        
+## configuration settings
+class Config:
+    def __init__(self, args):
+        self.vocab_size = 4096
+        self.dim = 552
+        self.n_heads = 12
+        self.head_size = self.dim // self.n_heads
+        self.n_layers = 12
+        self.n_kv_heads = 3
+        self.seq_len = 1024
+        self.multiple_of = 256                
+        self.batch_size = args.batch_size 
+        self.global_batch_size = 150_000 # number of tokens per update
+        self.world_size = torch.cuda.device_count()
+        self.grad_accumulation_steps = int(self.global_batch_size/(self.seq_len * self.batch_size * self.world_size))
+        self.learning_rate=5e-4
+        self.total_params = 0
+        self.tokenizer_path = args.tokenizer_path
+        self.n_train_examples = args.n_train_examples
+        self.n_val_examples = args.n_val_examples
+        self.max_iters = args.max_iters        
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -113,7 +135,19 @@ def train(rank, world_size, dataset, config):
 
     cleanup()
 
-def getArguments():
+    
+if __name__ == "__main__":
+    start_time = datetime.now()
+    warnings.filterwarnings("ignore")
+    ## setup logging
+    file_name = os.path.join("saved_artifacts","logs",datetime.now().strftime('log_%Y_%m_%d_%H_%M_%S.log'))
+    logging.basicConfig(level=logging.DEBUG, filename=file_name, filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+    
+    ## read number of GPUS
+    n_gpus = torch.cuda.device_count()
+    assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
+
+    ## Read commandline arguments
     ### Command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_save_path', dest="model_save_path", type=str, required=True,
@@ -135,47 +169,8 @@ def getArguments():
     parser.add_argument('--batch_size', dest="batch_size", type=int, required=False, default=16,
                         help="batch size (per process)")
     
-    args = parser.parse_args()
-    
-    ## configuration settings
-    class Config:
-        def __init__(self, args):
-            self.vocab_size = 4096
-            self.dim = 552
-            self.n_heads = 12
-            self.head_size = self.dim // self.n_heads
-            self.n_layers = 12
-            self.n_kv_heads = 3
-            self.seq_len = 1024
-            self.multiple_of = 256                
-            self.batch_size = args.batch_size 
-            self.global_batch_size = 150_000 # number of tokens per update
-            self.world_size = torch.cuda.device_count()
-            self.grad_accumulation_steps = int(self.global_batch_size/(self.seq_len * self.batch_size * self.world_size))
-            self.learning_rate=5e-4
-            self.total_params = 0
-            self.tokenizer_path = args.tokenizer_path
-            self.n_train_examples = args.n_train_examples
-            self.n_val_examples = args.n_val_examples
-            self.max_iters = args.max_iters
-            
+    args = parser.parse_args()            
     config = Config(args)
-
-    return config
-
-    
-if __name__ == "__main__":
-    start_time = datetime.now()
-    warnings.filterwarnings("ignore")
-    ## setup logging
-    file_name = os.path.join("saved_artifacts","logs",datetime.now().strftime('log_%Y_%m_%d_%H_%M_%S.log'))
-    logging.basicConfig(level=logging.DEBUG, filename=file_name, filemode='w', format='%(name)s - %(levelname)s - %(message)s')
-    ## read number of GPUS
-    n_gpus = torch.cuda.device_count()
-    assert n_gpus >= 2, f"Requires at least 2 GPUs to run, but got {n_gpus}"
-
-    ## Read commandline arguments
-    config = getArguments()
     
     ## Iintialize the datset
     dataset = TinyStories(config)
