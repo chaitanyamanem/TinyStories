@@ -61,6 +61,7 @@ class Config:
         self.max_iters = args.max_iters
         self.loss_check_steps = args.loss_check_steps
         self.checkpoint_save_path = args.checkpoint_save_path
+        self.wandb_project = args.wandb_project
         self.rank = 0 
 
 class AverageMeter:
@@ -145,8 +146,15 @@ def train(rank, world_size, dataset, config):
     print(f"Running on GPU{rank}.")
     setup(rank, world_size)
 
-    # Intializign some parameters
+    ## Intializign some parameters
     train_loss_meter = AverageMeter(name="train_loss")
+
+    ## Initialize wandb logging for main process
+    if rank == 0:
+        run = wandb.init(
+            project = config.wandb_project,
+            config = config.__dict__
+        )
 
     # create model and move it to GPU with id rank
     config.rank = rank
@@ -163,7 +171,9 @@ def train(rank, world_size, dataset, config):
     total_steps = config.max_iters if config.max_iters is not None else len(train_dataloader)
     train_bar = tqdm(total=total_steps, desc='Train Step', position=0, disable = not rank == 0) 
 
-    ## Train for given number of steps
+    ###############################
+    #######  TRAIN LOOP  ##########
+    ###############################
     for s in range(total_steps):        
         if s > config.max_iters: break ## check the maxiters condition \
 
@@ -241,11 +251,7 @@ if __name__ == "__main__":
     
     ## Iintialize the datset
     dataset = TinyStories(config)
-    ## Initialize wandb logging
-    run = wandb.init(
-        project = args.wandb_project,
-        config = config.__dict__
-    )
+    
     ## Run the distributed training
     mp.spawn(train,
              args=(n_gpus,dataset,config),
