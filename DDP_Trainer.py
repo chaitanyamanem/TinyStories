@@ -58,7 +58,33 @@ class Config:
         self.n_train_examples = args.n_train_examples
         self.n_val_examples = args.n_val_examples
         self.max_iters = args.max_iters     
-        self.rank = 0   
+        self.rank = 0 
+
+class AverageMeter:
+    def __init__(self, name):
+        self.name = name
+        self.reset()
+
+    @torch.no_grad
+    def reset(self):
+        self.val = 0
+        self.sum = 0
+        self.count = 0
+        self.avg = 0
+
+    @torch.no_grad
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        return f"{self.name}: {self.avg}"
+    
+    @torch.no_grad
+    def value(self):
+        return self.avg          
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -80,22 +106,40 @@ class ToyModel(nn.Module):
     def forward(self, x):
         return self.net2(self.relu(self.net1(x)))
 
-def val_loop(model, data_loader, loss_fn, rank):
-    loss = torch.zeros(len(data_loader))
-    model = model.module.to(rank)
-    test_bar = tqdm(total=len(data_loader), desc='Test Step', position=0)
-    for s,(x,y) in enumerate(data_loader):
-        x, y = x.to(rank), y.to(rank)
-        outputs = model(x)        
-        loss[s] = loss_fn(outputs, y)
-        test_bar.update(1)
-    return loss.mean()        
+@torch.no_grad
+def val_loop(dataloader, model, loss_fn, rank):
+    model.eval()
+    val_loss_meter = AverageMeter(name="val_loss")
+    val_loss_meter.reset()    
+    num_batches = len(dataloader) 
+    
+    model = model.to(rank)
+    
+    test_bar = tqdm(total=num_batches, desc='val_loss step', position=1, leave=False) 
+    for i, data in enumerate(dataloader):        
+        X,y = data["inputs"].to(rank), data["targets"].to(rank)
+        pred = model(X)
+        loss = loss_fn(torch.permute(pred,(0,-1,-2)), y)
+        val_loss_meter.update(loss.item(), X.shape[0])
+        test_bar.update(1) # for tqdm progress bar
+    model.train()
+    return val_loss_meter.value()
+
+@torch.no_grad
+def save_checkpoint(model, config):
+    model_save_path = os.path.join(config.model_save_path,"model.pt")
+    torch.save(model.state_dict(), model_save_path)
+
+
     
     
 
 def train(rank, world_size, dataset, config):
     print(f"Running on GPU{rank}.")
     setup(rank, world_size)
+
+    # Intializign some parameters
+    train_loss_meter = AverageMeter(name="train_loss")
 
     # create model and move it to GPU with id rank
     config.rank = rank
@@ -105,32 +149,34 @@ def train(rank, world_size, dataset, config):
     optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
     ## get the dataloader
     train_dataloader = dataset.getTrainDataLoader(ddp=True)
-    test_dataloader = dataset.getValDataLoader()
+    val_dataloader = dataset.getValDataLoader()
     print(f"Total number of steps in the datset on the GPU:{rank} is {len(train_dataloader)}.")
     ## set the tqdm bar
     train_bar = tqdm(total=len(train_dataloader), desc='Train Step', position=0, disable = not rank == 0)    
     for s,batch in enumerate(train_dataloader):        
         if s + 1 > config.max_iters: break ## check the maxiters condition \
-        ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0
-        #print(f"GPU{rank}: At step{s+1} weights of w11 and w12 is {model.net1.weight[0,:2]}")
-        x,y = batch["inputs"].to(rank), batch["targets"].to(rank) 
-        #print(f"GPU{rank}: At step{s+1} inputs shape:{x.shape} inputs{x[:2,:4]}")       
+
+        ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0        
+        x,y = batch["inputs"].to(rank), batch["targets"].to(rank)         
         outputs = ddp_model(x)        
         loss = loss_fn(torch.permute(outputs, (0,-1,-2)), y)
-        print(f"GPU{rank}, step{s+1}: loss {loss}")
-        loss = loss / config.grad_accumulation_steps ## normalizing
-        #print(f"Loss on GPU{rank} for STEP{s} is: {loss}")
+
+        if s % config.loss_check_steps == 0:
+            train_loss_meter.update(loss.item(), x.shape[0])
+            train_bar.write(f"GPU{rank}, step{s+1}: Trian Loss {train_loss_meter.value()}")
+            if rank == 0:                    
+                val_loss = val_loop(val_dataloader, ddp_model.module, loss_fn, rank)
+                save_checkpoint(ddp_model.module, config)
+                train_bar.write(f"GPU{rank}, step{s+1}: val_loss is {val_loss}")
+        dist.barrier()
+        loss = loss / config.grad_accumulation_steps ## normalizing        
         loss.backward()
-        #print(f"GPU{rank}: At step{s+1} gradients for w11 and w12 is {model.net1.weight.grad[0,:2]}")
+        
         if (s + 1) % config.grad_accumulation_steps == 0:
-            optimizer.step()
-            #print(f"GPU{rank}: At step{s+1} weights of w11 and w12 is {model.net1.weight[0,:2]}")
+            optimizer.step()            
             optimizer.zero_grad()
             
-        # if rank == 0  and s % 200 == 0:
-        #     val_loss = val_loop(ddp_model, test_dataloader, loss_fn, rank)
-        #     print(f"***validation*** loss on GPU{rank} for STEP{s} is: {val_loss}")
-        #dist.barrier()
+
             
         ## updatign tqdm progress bar
         train_bar.update(1) 
