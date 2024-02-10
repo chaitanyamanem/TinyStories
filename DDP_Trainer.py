@@ -57,7 +57,8 @@ class Config:
         self.tokenizer_path = args.tokenizer_path
         self.n_train_examples = args.n_train_examples
         self.n_val_examples = args.n_val_examples
-        self.max_iters = args.max_iters        
+        self.max_iters = args.max_iters     
+        self.rank = 0   
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -97,6 +98,7 @@ def train(rank, world_size, dataset, config):
     setup(rank, world_size)
 
     # create model and move it to GPU with id rank
+    config.rank = rank
     model = Model(config).to(rank)
     ddp_model = DDP(model, device_ids=[rank])
     loss_fn = nn.CrossEntropyLoss()  

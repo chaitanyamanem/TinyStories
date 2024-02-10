@@ -25,8 +25,8 @@ class RoPE(nn.Module):
         m_s = torch.tensor(range(self.m)).unsqueeze(axis=-1)
         
         thetas = 10000 ** (-2*(i_s-1)/self.d)
-        self.cos_mthetas = torch.cos(m_s * thetas).to("cuda")
-        self.sin_mthetas = torch.sin(m_s * thetas).to("cuda")
+        self.cos_mthetas = torch.cos(m_s * thetas).to(self.config.rank)
+        self.sin_mthetas = torch.sin(m_s * thetas).to(self.config.rank)
         
     def forward(self, x):
         """ assumes x in the format of """
