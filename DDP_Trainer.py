@@ -59,6 +59,7 @@ class Config:
         self.n_val_examples = args.n_val_examples
         self.max_iters = args.max_iters
         self.loss_check_steps = args.loss_check_steps
+        self.model_save_path = args.model_save_path
         self.rank = 0 
 
 class AverageMeter:
