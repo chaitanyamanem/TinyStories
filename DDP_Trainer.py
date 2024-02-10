@@ -57,7 +57,8 @@ class Config:
         self.tokenizer_path = args.tokenizer_path
         self.n_train_examples = args.n_train_examples
         self.n_val_examples = args.n_val_examples
-        self.max_iters = args.max_iters     
+        self.max_iters = args.max_iters
+        self.loss_check_steps = args.loss_check_steps
         self.rank = 0 
 
 class AverageMeter:
