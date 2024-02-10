@@ -156,7 +156,7 @@ def train(rank, world_size, dataset, config):
     ## set the tqdm bar
     train_bar = tqdm(total=len(train_dataloader), desc='Train Step', position=0, disable = not rank == 0)    
     for s,batch in enumerate(train_dataloader):        
-        if s + 1 > config.max_iters: break ## check the maxiters condition \
+        if s > config.max_iters: break ## check the maxiters condition \
 
         ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0        
         x,y = batch["inputs"].to(rank), batch["targets"].to(rank)         
