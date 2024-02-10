@@ -139,28 +139,29 @@ def getArguments():
     
     ## configuration settings
     class Config:
-        vocab_size = 4096
-        dim = 552
-        n_heads = 12
-        head_size = dim // n_heads
-        n_layers = 12
-        n_kv_heads = 3
-        seq_len = 1024
-        multiple_of = 256                
-        batch_size = args.batch_size 
-        global_batch_size = 150_000 # number of tokens per update
-        world_size = torch.cuda.device_count()
-        grad_accumulation_steps = int(global_batch_size/(seq_len * batch_size * world_size))
-        learning_rate=5e-4
-        total_params = 0
-        tokenizer_path = args.tokenizer_path
-        n_train_examples = args.n_train_examples
-        n_val_examples = args.n_val_examples
-        max_iters = args.max_iters
+        def __init__(self, args):
+            self.vocab_size = 4096
+            self.dim = 552
+            self.n_heads = 12
+            self.head_size = self.dim // self.n_heads
+            self.n_layers = 12
+            self.n_kv_heads = 3
+            self.seq_len = 1024
+            self.multiple_of = 256                
+            self.batch_size = args.batch_size 
+            self.global_batch_size = 150_000 # number of tokens per update
+            self.world_size = torch.cuda.device_count()
+            self.grad_accumulation_steps = int(self.global_batch_size/(self.seq_len * self.batch_size * self.world_size))
+            self.learning_rate=5e-4
+            self.total_params = 0
+            self.tokenizer_path = args.tokenizer_path
+            self.n_train_examples = args.n_train_examples
+            self.n_val_examples = args.n_val_examples
+            self.max_iters = args.max_iters
             
-    #config = Config()
+    config = Config(args)
 
-    return Config
+    return config
 
     
 if __name__ == "__main__":
