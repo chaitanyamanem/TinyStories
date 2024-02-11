@@ -53,7 +53,7 @@ class Config:
         self.global_batch_size = 150_000 # number of tokens per update
         self.world_size = torch.cuda.device_count()
         self.grad_accumulation_steps = int(self.global_batch_size/(self.seq_len * self.batch_size * self.world_size))
-        self.learning_rate=5e-4
+        self.learning_rate=args.lr
         self.total_params = 0
         self.tokenizer_path = args.tokenizer_path
         self.n_train_examples = args.n_train_examples
@@ -62,6 +62,7 @@ class Config:
         self.loss_check_steps = args.loss_check_steps
         self.checkpoint_save_path = args.checkpoint_save_path
         self.wandb_project = args.wandb_project
+        self.saved_checkpoint_path = args.saved_checkpoint_path
         self.rank = 0 
 
 class AverageMeter:
@@ -138,6 +139,27 @@ def save_checkpoint(model, optimizer, val_loss, config):
     state = {'model':model.state_dict(), 'optimizer':optimizer.state_dict(),'val_loss':val_loss}
     torch.save(state, checkpoint_save_path)
 
+def get_model(config):
+    model = Model(config)
+    if config.saved_checkpoint_path is not None:
+        checkpoint = torch.load(config.saved_checkpoint_path)
+        model.load_state_dict(checkpoint['model'])
+    return model
+
+def get_optimizer(config, ddp_model):
+    optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, 
+                                  betas=(0.9, 0.95), weight_decay=0.1)
+    if config.saved_checkpoint_path is not None:
+        checkpoint = torch.load(config.saved_checkpoint_path)
+        optimizer.load_state_dict(checkpoint['optimizer'])    
+        for g in optimizer.param_groups:
+            g['lr'] = config.learning_rate
+    
+    return optimizer
+
+
+    
+
 
     
     
@@ -158,10 +180,10 @@ def train(rank, world_size, dataset, config):
 
     # create model and move it to GPU with id rank
     config.rank = rank
-    model = Model(config).to(rank)
+    model = get_model(config).to(rank)
     ddp_model = DDP(model, device_ids=[rank])
-    loss_fn = nn.CrossEntropyLoss()  
-    optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = get_optimizer(config, ddp_model)    
     ## get the dataloader
     train_dataloader = dataset.getTrainDataLoader(ddp=True)
     iterator = iter(train_dataloader)
@@ -230,7 +252,7 @@ if __name__ == "__main__":
                         help="enter the the path to save the model with .pt extension")
     parser.add_argument('--max_iters', dest="max_iters", type=int, required=False,
                         help="maximum iteration of a model")
-    parser.add_argument('--base_model_path', dest="base_model_path", type=str, required=False, default='NA',
+    parser.add_argument('--saved_checkpoint_path', dest="saved_checkpoint_path", type=str, required=False, 
                         help="existign model to train on")
     parser.add_argument('--loss_check_steps', dest="loss_check_steps", type=int, required=False, default=5000,
                         help="Numbers of steps after vlaidation metrcis calculated")
@@ -243,6 +265,8 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_project', dest="wandb_project", type=str, required=False, default="test_project",
                         help="wandb project name")
     parser.add_argument('--batch_size', dest="batch_size", type=int, required=False, default=16,
+                        help="batch size (per process)")
+    parser.add_argument('--lr', dest="lr", type=float, required=False, default=5e-4,
                         help="batch size (per process)")
     
     args = parser.parse_args()            
