@@ -142,7 +142,7 @@ def save_checkpoint(model, optimizer, val_loss, config):
 def get_model(config):
     model = Model(config)
     if config.saved_checkpoint_path is not None:
-        checkpoint = torch.load(config.saved_checkpoint_path)
+        checkpoint = torch.load(os.path.join(config.saved_checkpoint_path,"checkpoint.pt"))
         model.load_state_dict(checkpoint['model'])
     return model
 
@@ -150,7 +150,7 @@ def get_optimizer(config, ddp_model):
     optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, 
                                   betas=(0.9, 0.95), weight_decay=0.1)
     if config.saved_checkpoint_path is not None:
-        checkpoint = torch.load(config.saved_checkpoint_path)
+        checkpoint = torch.load(os.path.join(config.saved_checkpoint_path,"checkpoint.pt"))
         optimizer.load_state_dict(checkpoint['optimizer'])    
         for g in optimizer.param_groups:
             g['lr'] = config.learning_rate
