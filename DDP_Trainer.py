@@ -42,11 +42,11 @@ class Dataset:
 class Config:
     def __init__(self, args):
         self.vocab_size = 4096
-        self.dim = 552
-        self.n_heads = 12
+        self.dim = 768
+        self.n_heads = 8
         self.head_size = self.dim // self.n_heads
-        self.n_layers = 12
-        self.n_kv_heads = 3
+        self.n_layers = 8
+        self.n_kv_heads = 8
         self.seq_len = 1024
         self.multiple_of = 256                
         self.batch_size = args.batch_size 
@@ -146,9 +146,10 @@ def get_model(config):
         model.load_state_dict(checkpoint['model'])
     return model
 
-def get_optimizer(config, ddp_model):
-    optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, 
-                                  betas=(0.9, 0.95), weight_decay=0.1)
+def get_optimizer(config, model):
+    optimizer = model.configure_optimizers(0.1, config.learning_rate, (0.9, 0.95), "cuda")
+    # optimizer = torch.optim.AdamW(ddp_model.parameters(), lr = config.learning_rate, 
+    #                               betas=(0.9, 0.95), weight_decay=0.1)
     if config.saved_checkpoint_path is not None:
         checkpoint = torch.load(os.path.join(config.saved_checkpoint_path,"checkpoint.pt"))
         optimizer.load_state_dict(checkpoint['optimizer'])    
@@ -182,8 +183,9 @@ def train(rank, world_size, dataset, config):
     config.rank = rank
     model = get_model(config).to(rank)
     ddp_model = DDP(model, device_ids=[rank])
+    ddp_model = torch.compile(ddp_model)
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = get_optimizer(config, ddp_model)    
+    optimizer = get_optimizer(config, model)    
     ## get the dataloader
     train_dataloader = dataset.getTrainDataLoader(ddp=True)
     iterator = iter(train_dataloader)
@@ -266,7 +268,7 @@ if __name__ == "__main__":
                         help="wandb project name")
     parser.add_argument('--batch_size', dest="batch_size", type=int, required=False, default=16,
                         help="batch size (per process)")
-    parser.add_argument('--lr', dest="lr", type=float, required=False, default=5e-4,
+    parser.add_argument('--lr', dest="lr", type=float, required=False, default=6e-4,
                         help="batch size (per process)")
     
     args = parser.parse_args()            
