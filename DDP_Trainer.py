@@ -218,6 +218,7 @@ def train(rank, world_size, dataset, config):
     for s in range(total_steps+1):
         ## Set learnign decay
         lr = get_lr(s)
+        wandb.log({'learning_rate':lr})
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr       
 
