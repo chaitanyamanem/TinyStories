@@ -1,6 +1,7 @@
 
 import os
 import sys
+import math
 import argparse
 import tempfile
 import warnings
@@ -20,6 +21,7 @@ from tinystories_dataset import TinyStories
 from model import Model
 
 
+torch.set_float32_matmul_precision('high')
 
 class Dataset:
     def __init__(self, batch_size=32):        
@@ -53,12 +55,16 @@ class Config:
         self.global_batch_size = 150_000 # number of tokens per update
         self.world_size = torch.cuda.device_count()
         self.grad_accumulation_steps = int(self.global_batch_size/(self.seq_len * self.batch_size * self.world_size))
+        self.grad_clip = 1.0
         self.learning_rate=args.lr
+        self.min_lr = self.learning_rate / 10
+        self.warmup_steps = 1000
         self.total_params = 0
         self.tokenizer_path = args.tokenizer_path
         self.n_train_examples = args.n_train_examples
         self.n_val_examples = args.n_val_examples
         self.max_iters = args.max_iters
+        self.lr_decay_iters = args.max_iters
         self.loss_check_steps = args.loss_check_steps
         self.checkpoint_save_path = args.checkpoint_save_path
         self.wandb_project = args.wandb_project
@@ -160,7 +166,18 @@ def get_optimizer(config, model):
 
 
     
-
+def get_lr(it, config):
+    # 1) linear warmup for warmup_iters steps
+    if it < config.warmup_steps:
+        return config.learning_rate * it / config.warmup_steps
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > config.lr_decay_iters:
+        return config.min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - config.warmup_steps) / (config.lr_decay_iters - config.warmup_steps)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+    return config.min_lr + coeff * (config.learning_rate - config.min_lr)
 
     
     
@@ -181,11 +198,11 @@ def train(rank, world_size, dataset, config):
 
     # create model and move it to GPU with id rank
     config.rank = rank
-    model = get_model(config).to(rank)
-    ddp_model = DDP(model, device_ids=[rank])
-    ddp_model = torch.compile(ddp_model)
+    model = get_model(config).to(rank)    
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = get_optimizer(config, model)    
+    optimizer = get_optimizer(config, model)
+    model = DDP(model, device_ids=[rank])
+    model = torch.compile(model)    
     ## get the dataloader
     train_dataloader = dataset.getTrainDataLoader(ddp=True)
     iterator = iter(train_dataloader)
@@ -198,9 +215,13 @@ def train(rank, world_size, dataset, config):
     ###############################
     #######  TRAIN LOOP  ##########
     ###############################
-    for s in range(total_steps+1):       
+    for s in range(total_steps+1):
+        ## Set learnign decay
+        lr = get_lr(s)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr       
 
-        ddp_model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0
+        model.require_backward_grad_sync = (s + 1) % config.grad_accumulation_steps == 0
         ## get one batch of data
         try:
             batch = next(iterator)
@@ -209,15 +230,15 @@ def train(rank, world_size, dataset, config):
             batch = next(iterator)        
         x,y = batch["inputs"].to(rank), batch["targets"].to(rank)
         #forword pass         
-        outputs = ddp_model(x)
+        outputs = model(x)
         #loss        
         loss = loss_fn(torch.permute(outputs, (0,-1,-2)), y)
         ## Validation check
         if s % config.loss_check_steps == 0:
             train_loss_meter.update(loss.item(), x.shape[0])            
             if rank == 0:                    
-                val_loss = val_loop(val_dataloader, ddp_model.module, loss_fn, rank)
-                save_checkpoint(ddp_model.module, optimizer, val_loss, config)
+                val_loss = val_loop(val_dataloader, model.module, loss_fn, rank)
+                save_checkpoint(model.module, optimizer, val_loss, config)
                 train_bar.write(f"GPU{rank}, step{s}: train loss:{train_loss_meter.value()} val_loss is {val_loss}")
                 wandb.log({'train/loss':train_loss_meter.value(), 'val/loss':val_loss})
         dist.barrier()
@@ -225,6 +246,7 @@ def train(rank, world_size, dataset, config):
         loss.backward()
         
         if (s + 1) % config.grad_accumulation_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             optimizer.step()            
             optimizer.zero_grad()
             
