@@ -9,6 +9,7 @@ from tqdm import tqdm
 import pickle
 import os
 import wandb
+torch.set_float32_matmul_precision('high')
 
 
 class AverageMeter:
