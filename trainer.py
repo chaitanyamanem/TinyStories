@@ -84,8 +84,9 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 
     val_loss = AverageMeter(name="val_loss")
     history = {'train_loss':[], 'val_loss':[]}
     stop_training = False
+    checkpoint_save_path = os.path.join(model_save_path,"checkpoint.pt")
 
-    for batch in range(total_steps):
+    for batch in range(total_steps+1):
         if batch > total_steps or stop_training:
             break
         data = dataset.getBatch()
@@ -104,9 +105,11 @@ def train_loop(dataloader, model, loss_fn, optimizer, grad_accumulation_steps = 
             test_loop(val_data, model, loss_fn, val_loss)
             history['val_loss'].append(val_loss.value())
             train_bar.write(f"Step:{batch} {train_loss}, {val_loss}")            
-            stop_training, msg = callback.check(val_loss.value())            
-            # save the model
-            torch.save(model, model_save_path)
+            #stop_training, msg = callback.check(val_loss.value())            
+            # save the model            
+            state = {'model':model.state_dict(), 'val_loss':val_loss.value()}
+            torch.save(state, checkpoint_save_path)
+            
             ## Log on wandb
             wandb.log({'train/loss':train_loss.value(), 'val/loss':val_loss.value()})
                 
@@ -185,8 +188,8 @@ if __name__ == '__main__':
             self.n_heads = 8
             self.head_size = int(self.embedding_dim // self.n_heads)
             self.n_blocks = 8 #number of layers
-            self.batch_size = 4
-            self.grad_accumulation_steps = 128
+            self.batch_size = 16
+            self.grad_accumulation_steps = 8
             self.learning_rate=5e-4
             self.total_params = 0
             self.tokenizer_path = "saved_artifacts/tokenizers"
@@ -244,9 +247,9 @@ if __name__ == '__main__':
                          model_save_path=model_save_path)
     #test_loop(val_data_loader, model, loss_fn)
     print("Done!")
-    torch.save(model, model_save_path)
-    loss_data_save_path =  model_save_path[:model_save_path.rfind('/')]    
-    with open(os.path.join(loss_data_save_path,"loss_data.pkl"), 'wb') as f:
-        pickle.dump(history, f)
+    #torch.save(model, model_save_path)
+    #loss_data_save_path =  model_save_path[:model_save_path.rfind('/')]    
+    # with open(os.path.join(loss_data_save_path,"loss_data.pkl"), 'wb') as f:
+    #     pickle.dump(history, f)
     # save the model
     
