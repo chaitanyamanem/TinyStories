@@ -238,6 +238,7 @@ if __name__ == '__main__':
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr = config.learning_rate, betas=(0.9, 0.95), weight_decay=0.1)
     early_stopping = EarlyStopping(patience=2, mode='min')
+    model = torch.compile(model)
     ## Train the model
     
     # for t in range(config.epochs):
