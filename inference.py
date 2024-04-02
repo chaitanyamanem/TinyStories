@@ -55,6 +55,7 @@ def get_tokenizer(config):
     return tokenizer
 
 def get_model(config, local_rank:int):
+    config.rank = local_rank
     model = Model(config)
     model = AutoModel(model, config, device=local_rank)
     #checkpoint = torch.load(os.path.join(config.saved_checkpoint_path,"checkpoint.pt"))    
