@@ -6,6 +6,12 @@ import inspect
 
 
 class RoPE(nn.Module):
+    """
+    *custom implementaiton*
+    This class provides Rotary Positional Encodign for the input data (word embeddings)
+    Usally applied on Q and V
+    reference: https://arxiv.org/abs/2104.09864
+    """
     def __init__(self,config):
         super().__init__()
         self.config = config
@@ -16,6 +22,11 @@ class RoPE(nn.Module):
     def __set_thetas(self):
         """This sets the parameters of the rope as per the formula
         Θ = {θi = 10000−2(i−1)/d, i ∈ [1, 2, ..., d/2]}
+
+        it also precomputes real (cos mtheta) and imaginary (sin mtheta) parts of the RoPE equation to further use in the 
+        `forward` method
+
+        reference: https://arxiv.org/abs/2104.09864
         """
         assert self.config.head_size % 2 == 0, f"Head size:{self.config.head_size} shouls be even number"
         self.d = self.config.head_size
@@ -30,18 +41,40 @@ class RoPE(nn.Module):
         self.sin_mthetas = torch.sin(m_s * thetas).to(self.config.rank)
         
     def forward(self, x):
-        """ assumes x in the format of """
-        d  = x.shape[-1]
+        """ 
+        Encodes positional information into context embeddings Q and V
+        It expects the shape of the input `x` to be 4 dimensional
+        x should be in the form x[b,h,t,s]
+        here,   b - batch dimension
+                h - number of heads
+                t - time steps (number of words)
+                s - size of the head
+
+        reference: https://arxiv.org/abs/2104.09864                
+        """
+        d, t   = x.shape[-1], x.shape[-2]
         
         assert d == self.d
         
-        x = self.cos_mthetas * x + self.sin_mthetas * torch.cat([-1 * x[:,:,:,self.d//2:],x[:,:,:,:self.d//2]], axis=-1)
+        x = self.cos_mthetas[:t,:] * x + self.sin_mthetas[:t,:] * torch.cat([-1 * x[:,:,:,self.d//2:],x[:,:,:,:self.d//2]], axis=-1)
         return x        
     
     
     
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
+    """
+    *custom implementaiton*
+    This funciton is used for grouped query attention GQA.
+    This replicates the K and V to match the dimension along the heads.
+    Expected shape of the input(x) is
+        x[b,t,h,s]
+        here,   b - batch dimension
+                t - time steps (number of words)
+                h - number of heads                
+                s - size of the head
+
+    reference: https://arxiv.org/pdf/2305.13245
+    """
     bs, slen, n_kv_heads, head_dim = x.shape
     if n_rep == 1:
         return x
@@ -52,6 +85,10 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     )
 
 class MultiHeadAttention(nn.Module):
+    """
+    This module is a multi head attention part of the Transformer.
+    This computes the scaled dot product between the Q, K and V
+    """
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -95,6 +132,11 @@ class MultiHeadAttention(nn.Module):
     
     
 class FeedForwordNetwork(nn.Module):
+    """
+    This is a stack of linear layers and one SiLU activation
+    All togather forms SwiGLU
+    reference: https://arxiv.org/pdf/2002.05202
+    """
     def __init__(self, config):
         super().__init__()
         self.config = config        
@@ -111,6 +153,11 @@ class FeedForwordNetwork(nn.Module):
         return out
     
 class RMSNorm(nn.Module):
+    """
+    *custom implementaiton*
+    Similar to Layer norm but with only scaling and omiiting the centering part.
+    reference: https://arxiv.org/abs/1910.07467
+    """
     def __init__(self, config):
         super().__init__()
         self.eps = 1e-5
@@ -125,6 +172,13 @@ class RMSNorm(nn.Module):
         return output * self.weight
     
 class AttentionLayer(nn.Module):
+    """
+    This is equal to one block or layer in the transformer, comprises of 
+    RMSNorm
+    Residual connection
+    Multi Head Attention
+    feedforword block
+    """
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -155,6 +209,10 @@ class Model(nn.Module):
         return x
     
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+        """
+        This create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        """
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
