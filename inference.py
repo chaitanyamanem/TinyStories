@@ -120,7 +120,7 @@ def inference(dataloader, config):
 
 def setup():
     # initialize the process group
-    dist.init_process_group(backend="gloo")
+    dist.init_process_group(backend="nccl")
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 def cleanup():
