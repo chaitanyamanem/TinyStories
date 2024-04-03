@@ -92,7 +92,7 @@ def inference(dataloader, config):
         prompts += inputs
         total_tokens_count += tokens_count
         tokens_rate = int(total_tokens_count / ((datetime.now() - start_time).total_seconds()))
-        inference_bar.write(f"Tokens generation speed: {tokens_rate} / second and per process")
+        inference_bar.write(f"Tokens generation speed GPU{local_rank}: {tokens_rate} / second and per process")
 
     
 
@@ -127,10 +127,10 @@ def cleanup():
     dist.destroy_process_group()        
 
 def main(config):
-    setup()
+    # setup()
     dataloader = TinyStories(config).getTestDataLoader(ddp=True)
     inference(dataloader, config)
-    cleanup()
+    # cleanup()
     
 if __name__ == "__main__":
     start_time = datetime.now()
