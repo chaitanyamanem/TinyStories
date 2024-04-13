@@ -127,10 +127,10 @@ def cleanup():
     dist.destroy_process_group()        
 
 def main(config):
-    # setup()
+    setup()
     dataloader = TinyStories(config).getTestDataLoader(ddp=True)
     inference(dataloader, config)
-    # cleanup()
+    cleanup()
     
 if __name__ == "__main__":
     start_time = datetime.now()

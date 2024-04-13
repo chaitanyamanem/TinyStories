@@ -103,8 +103,7 @@ class MultiHeadAttention(nn.Module):
         b,t,d = x.shape
         q = self.query(x).view(b,t,self.config.n_heads,self.config.head_size)
         k = self.key(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
-        v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
-        
+        v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size)        
         
         ## Add rotary embeddings        
         q = self.rope(q.permute(0,2,1,3)).permute(0,2,1,3)
