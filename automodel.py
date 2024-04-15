@@ -37,8 +37,17 @@ class AutoModel(nn.Module):
             prompts.append(prompt.tolist())
             prompt_len = len(prompt.tolist())
             prompt = prompt.unsqueeze(axis=0)
+
+            if self.model_config.enable_kv_cache:
+                ## Reset kv_cache for every exampel if is enabled.
+                self.model.reset_kv_cache()
+
             for step in range(generation_config["max_new_tokens"]):
-                context = prompt[:,-self.model_config.seq_len:] #2 dimension                
+                if self.model_config.enable_kv_cache and step != 0:
+                    context = prompt[:,-1]
+                else:
+                    context = prompt[:,-self.model_config.seq_len:] #2 dimension
+
                 logits = self.model(context)[:,-1,:] # 2 dimension
                 if generation_config["temperature"] != 0.0:
                     logits = logits / generation_config["temperature"]

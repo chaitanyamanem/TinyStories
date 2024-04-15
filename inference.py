@@ -48,6 +48,7 @@ class Config:
         self.n_test_examples = args.n_test_examples        
         self.steps_to_serialize = args.steps_to_serialize
         self.rank = 0
+        self.enable_kv_cache = True
 
 def get_tokenizer(config):
     tokenizer_model_path = os.path.join(config.tokenizer_path,f"tok_{config.vocab_size}.model")
@@ -74,8 +75,9 @@ def inference(dataloader, config):
     generation_config = {
         'padding_token': tokenizer.eos_id(),
         'bos_id': tokenizer.bos_id(),
-        'max_new_tokens': 200,
-        'temperature': 0.1
+        'max_new_tokens': 700,
+        'temperature': 0.1,
+        'enable_kv_cache':False
     }
     generated_tokens = []
     prompts = []
@@ -92,7 +94,7 @@ def inference(dataloader, config):
         prompts += inputs
         total_tokens_count += tokens_count
         tokens_rate = int(total_tokens_count / ((datetime.now() - start_time).total_seconds()))
-        inference_bar.write(f"Tokens generation speed GPU{local_rank}: {tokens_rate} / second and per process")
+        inference_bar.write(f"Tokens generation speed GPU{local_rank}: {tokens_rate} / sec, Current batch ")
 
     
 
@@ -120,7 +122,7 @@ def inference(dataloader, config):
 
 def setup():
     # initialize the process group
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(backend="gloo")
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 def cleanup():

@@ -89,9 +89,10 @@ class MultiHeadAttention(nn.Module):
     This module is a multi head attention part of the Transformer.
     This computes the scaled dot product between the Q, K and V
     """
-    def __init__(self, config):
+    def __init__(self, config, layer_id):
         super().__init__()
         self.config = config
+        self.layer_id = layer_id
         self.n_rep = self.config.n_heads // self.config.n_kv_heads
         self.query = nn.Linear(self.config.dim, self.config.n_heads * self.config.head_size, bias=False)
         self.key = nn.Linear(self.config.dim, self.config.n_kv_heads * self.config.head_size, bias=False)
@@ -99,14 +100,23 @@ class MultiHeadAttention(nn.Module):
         self.rope = RoPE(self.config)
         self.proj = nn.Linear(self.config.n_heads * self.config.head_size, self.config.n_heads * self.config.head_size, bias=False)
         
-    def forward(self, x, y=None):
+    def forward(self, x, y=None, enable_kv_cache=False, kv_cache=None):
         b,t,d = x.shape
         q = self.query(x).view(b,t,self.config.n_heads,self.config.head_size)
         k = self.key(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
-        v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size)        
+        v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
+
+        ## concat k,v from cache
+        if kv_cache[self.layer_id][0] is not None:
+            #print(f"Detected existing cache for the layer {self.layer_id}")
+            k = torch.cat((kv_cache[self.layer_id][0],k), axis=1)
+            v = torch.cat((kv_cache[self.layer_id][1],v), axis=1)
+            ## Makesure K and v is not more than model allowed context length
+            k = k[:,-self.config.seq_len:, :, :]
+            v = v[:, -self.config.seq_len:, :, :]        
         
         ## Add rotary embeddings        
-        q = self.rope(q.permute(0,2,1,3)).permute(0,2,1,3)
+        q = self.rope(q.permute(0,2,1,3)).permute(0,2,1,3) # (bs, n_local_heads, seqlen, head_dim)
         k = self.rope(k.permute(0,2,1,3)).permute(0,2,1,3)
         
         ##GQA 
@@ -117,9 +127,19 @@ class MultiHeadAttention(nn.Module):
         q = q.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+
         
+        #print(f"q and k shapes: {q.shape, k.shape}")
         ## Flash attention
-        x = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
+        if enable_kv_cache:
+            mask = torch.ones(q.size()[-2], k.size()[-2], dtype=torch.bool).to(k.device)
+            x = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False,attn_mask=mask)
+        else:
+            x = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+        ## add the new token to the cache
+        if enable_kv_cache:
+            kv_cache[self.layer_id] = (k.transpose(1, 2),v.transpose(1, 2)) # (bs, seqlen, n_local_heads, head_dim)
         
          # restore time as batch dimension and concat heads
         x = x.transpose(1, 2).contiguous().view(b, t, -1)
@@ -127,7 +147,8 @@ class MultiHeadAttention(nn.Module):
         # final projection into the residual stream
         x = self.proj(x)
         
-        return x        
+        
+        return x, kv_cache        
     
     
 class FeedForwordNetwork(nn.Module):
@@ -178,34 +199,46 @@ class AttentionLayer(nn.Module):
     Multi Head Attention
     feedforword block
     """
-    def __init__(self, config):
+    def __init__(self, config, i):
         super().__init__()
         self.config = config
-        self.mha = MultiHeadAttention(self.config)
+        self.layer_id = i
+        self.mha = MultiHeadAttention(self.config, self.layer_id)
         self.ffn = FeedForwordNetwork(self.config)
         self.anorm = RMSNorm(config)
         self.fnorm = RMSNorm(config)
         
-    def forward(self,x):
-        x = x + self.mha(self.anorm(x))
+        
+    def forward(self, inputs:tuple):
+        x, enable_kv_cache, kv_cache = inputs        
+        x_new, kv_cache = self.mha(self.anorm(x), enable_kv_cache=enable_kv_cache, kv_cache=kv_cache)
+        x = x + x_new
         x = x + self.ffn(self.fnorm(x))
-        return x
+        return (x, enable_kv_cache, kv_cache)
 
 class Model(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        self.enable_kv_cache = config.enable_kv_cache #boolean value
+        self.kv_cache = [(None,None)   for _ in range(self.config.n_layers)]
         self.embedding_layer = nn.Embedding(self.config.vocab_size, self.config.dim)
-        self.layers = nn.Sequential(*[AttentionLayer(self.config) for _ in range(self.config.n_layers)])
+        self.layers = nn.Sequential(*[AttentionLayer(self.config, i) for i in range(self.config.n_layers)])
         self.hnorm = RMSNorm(config)
         self.clf_head = nn.Linear(self.config.dim, self.config.vocab_size)
     
     def forward(self, x, y=None):
         x = self.embedding_layer(x)
-        x = self.layers(x)
+        x, _, self.kv_cache = self.layers((x, self.enable_kv_cache, self.kv_cache))
         x = self.hnorm(x)
         x = self.clf_head(x)
+        # if self.enable_kv_cache:
+        #     return x, self.kv_cache
+        # else:
         return x
+        
+    def reset_kv_cache(self):
+        self.kv_cache = [(None,None)   for _ in range(self.config.n_layers)]
     
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
