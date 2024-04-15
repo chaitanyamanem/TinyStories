@@ -88,11 +88,14 @@ def generate(prompt, max_new_tokens=300, temperature=0.0):
     gen_loop.write("\n###############################")
 
 
-#if __name__ == '__main__':
-
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--model", required = False, default="saved_artifacts/models/model240221/checkpoint.pt", help="path of the model")    
-    # parser.add_argument("--max_new_tokens", required=False, default=500, help="Number of new tokens to generate by the model")
-    # parser.add_argument("--prompt", required=True, help="prompt to begain the generation with")      
-    # parser.add_argument("--temperature", required= False, default=0.0, type=float) 
-    # args = parser.parse_args()
+if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser()
+    # parser.add_argument("--model", required = False, default="saved_artifacts/models/model240221/checkpoint.pt", help="path of the model")
+    parser.add_argument("--max_new_tokens", required=False, default=1000, help="Number of new tokens to generate by the model")
+    parser.add_argument("--prompt", required=True, help="prompt to begain the generation with")      
+    parser.add_argument("--temperature", required= False, default=0.1, type=float) 
+    args = parser.parse_args()
+    
+    generate(args.prompt, args.max_new_tokens, args.temperature)
+    
