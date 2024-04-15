@@ -29,7 +29,7 @@ class Config:
         self.total_params = 0
         self.tokenizer_path = "saved_artifacts/tokenizers"        
         self.rank = 0
-        self.enable_kv_cache = False
+        self.enable_kv_cache = True
 
 
 config = Config()
@@ -51,7 +51,7 @@ def generate(prompt, max_new_tokens=300, temperature=0.0):
     start_time = datetime.now()    
     gen_loop = tqdm.tqdm(total=max_new_tokens, desc="gen_progress")
     
-    while t <= max_new_tokens and int(idx[:,-1].item()) != int(tokenizer.bos_id()):
+    while t <= max_new_tokens: #and int(idx[:,-1].item()) != int(tokenizer.bos_id()):
         #print(f"Timestep: {t}")
         if config.enable_kv_cache and t != 0:
             prompt = torch.unsqueeze(idx[:,-1], dim=-1)
