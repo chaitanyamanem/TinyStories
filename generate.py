@@ -44,7 +44,7 @@ tokenizer = spm.SentencePieceProcessor(model_file='saved_artifacts/tokenizers/to
 
 def generate(prompt, max_new_tokens=500, temperature=0.0):
 
-    idx = torch.tensor(tokenizer.encode([prompt]), dtype=torch.long).to("cuda")
+    idx = torch.tensor(tokenizer.encode([prompt],add_bos=True), dtype=torch.long).to("cuda")
     t = 0
     gen_loop = tqdm.tqdm(total=max_new_tokens, desc="gen_progress")
     while t <= max_new_tokens and int(idx[:,-1].item()) != int(tokenizer.bos_id()):
