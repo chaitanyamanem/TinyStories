@@ -4,7 +4,6 @@ import numpy as np
 import inspect
 
 
-
 class RoPE(nn.Module):
     """
     *custom implementaiton*
@@ -40,7 +39,7 @@ class RoPE(nn.Module):
         self.cos_mthetas = torch.cos(m_s * thetas).to(self.config.rank)
         self.sin_mthetas = torch.sin(m_s * thetas).to(self.config.rank)
         
-    def forward(self, x):
+    def forward(self, x, tn):
         """ 
         Encodes positional information into context embeddings Q and V
         It expects the shape of the input `x` to be 4 dimensional
@@ -52,11 +51,16 @@ class RoPE(nn.Module):
 
         reference: https://arxiv.org/abs/2104.09864                
         """
-        d, t   = x.shape[-1], x.shape[-2]
+        d, t   = x.shape[-1], x.shape[-2]        
         
         assert d == self.d
         
-        x = self.cos_mthetas[:t,:] * x + self.sin_mthetas[:t,:] * torch.cat([-1 * x[:,:,:,self.d//2:],x[:,:,:,:self.d//2]], axis=-1)
+        if tn>0:
+            
+            x = self.cos_mthetas[tn,:] * x + self.sin_mthetas[tn,:] * torch.cat([-1 * x[:,:,:,self.d//2:],x[:,:,:,:self.d//2]], axis=-1)
+        else:
+            
+            x = self.cos_mthetas[:t,:] * x + self.sin_mthetas[:t,:] * torch.cat([-1 * x[:,:,:,self.d//2:],x[:,:,:,:self.d//2]], axis=-1)
         return x        
     
     
@@ -89,66 +93,63 @@ class MultiHeadAttention(nn.Module):
     This module is a multi head attention part of the Transformer.
     This computes the scaled dot product between the Q, K and V
     """
-    def __init__(self, config, layer_id):
+    def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer_id = layer_id
+        self.enable_kv_cache = self.config.enable_kv_cache
         self.n_rep = self.config.n_heads // self.config.n_kv_heads
         self.query = nn.Linear(self.config.dim, self.config.n_heads * self.config.head_size, bias=False)
         self.key = nn.Linear(self.config.dim, self.config.n_kv_heads * self.config.head_size, bias=False)
         self.value = nn.Linear(self.config.dim, self.config.n_kv_heads * self.config.head_size, bias=False)
         self.rope = RoPE(self.config)
         self.proj = nn.Linear(self.config.n_heads * self.config.head_size, self.config.n_heads * self.config.head_size, bias=False)
+        self.kv_cache = {"k":None, "v":None}
         
-    def forward(self, x, y=None, enable_kv_cache=False, kv_cache=None):
+    def forward(self, x, y=None):
         b,t,d = x.shape
+        tn = 0 ## if no kv cache this remains 0
+        
         q = self.query(x).view(b,t,self.config.n_heads,self.config.head_size)
         k = self.key(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
-        v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size)
-
-        ## concat k,v from cache
-        if kv_cache[self.layer_id][0] is not None:
-            #print(f"Detected existing cache for the layer {self.layer_id}")
-            k = torch.cat((kv_cache[self.layer_id][0],k), axis=1)
-            v = torch.cat((kv_cache[self.layer_id][1],v), axis=1)
-            ## Makesure K and v is not more than model allowed context length
-            k = k[:,-self.config.seq_len:, :, :]
-            v = v[:, -self.config.seq_len:, :, :]        
+        v = self.value(x).view(b,t,self.config.n_kv_heads,self.config.head_size) 
+        
+        ## calculate tn
+        if self.kv_cache["k"] is not None:
+            tn = self.kv_cache["k"].shape[-2]
         
         ## Add rotary embeddings        
-        q = self.rope(q.permute(0,2,1,3)).permute(0,2,1,3) # (bs, n_local_heads, seqlen, head_dim)
-        k = self.rope(k.permute(0,2,1,3)).permute(0,2,1,3)
-        
-        ##GQA 
-        #k = repeat_kv(k,self.n_rep)
-        #v = repeat_kv(v,self.n_rep)
-        
-        # make heads into a batch dimension
-        q = q.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        q = self.rope(q.permute(0,2,1,3), tn)
+        k = self.rope(k.permute(0,2,1,3), tn)
+        ## permute the v dimesion also
+        v = v.permute(0,2,1,3) #  (bs, n_local_heads, seqlen, head_dim)        
 
         
-        #print(f"q and k shapes: {q.shape, k.shape}")
+        ## concat k and v with cache
+        if self.kv_cache["k"] is not None and self.kv_cache["v"] is not None:
+            k = torch.cat((self.kv_cache["k"],k), dim=-2)
+            v = torch.cat((self.kv_cache["v"],v), dim=-2)
+        if self.enable_kv_cache:
+            self.kv_cache["k"] = k[:,:,-(self.config.seq_len-1):,].detach().clone()
+            self.kv_cache["v"] = v[:,:,-(self.config.seq_len-1):,].detach().clone()
+            
+        
         ## Flash attention
-        if enable_kv_cache:
+        if self.enable_kv_cache:
             mask = torch.ones(q.size()[-2], k.size()[-2], dtype=torch.bool).to(k.device)
             x = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False,attn_mask=mask)
         else:
             x = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
-
-        ## add the new token to the cache
-        if enable_kv_cache:
-            kv_cache[self.layer_id] = (k.transpose(1, 2),v.transpose(1, 2)) # (bs, seqlen, n_local_heads, head_dim)
         
          # restore time as batch dimension and concat heads
         x = x.transpose(1, 2).contiguous().view(b, t, -1)
 
         # final projection into the residual stream
         x = self.proj(x)
-        
-        
-        return x, kv_cache        
+        #print(f"Final shape: {x.shape}")
+        return x
+    
+    def reset_kv_cache(self):
+        self.kv_cache = {"k":None, "v":None}
     
     
 class FeedForwordNetwork(nn.Module):
@@ -199,46 +200,41 @@ class AttentionLayer(nn.Module):
     Multi Head Attention
     feedforword block
     """
-    def __init__(self, config, i):
+    def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer_id = i
-        self.mha = MultiHeadAttention(self.config, self.layer_id)
+        self.mha = MultiHeadAttention(self.config)
         self.ffn = FeedForwordNetwork(self.config)
         self.anorm = RMSNorm(config)
         self.fnorm = RMSNorm(config)
         
-        
-    def forward(self, inputs:tuple):
-        x, enable_kv_cache, kv_cache = inputs        
-        x_new, kv_cache = self.mha(self.anorm(x), enable_kv_cache=enable_kv_cache, kv_cache=kv_cache)
-        x = x + x_new
+    def forward(self,x):
+        x = x + self.mha(self.anorm(x))
         x = x + self.ffn(self.fnorm(x))
-        return (x, enable_kv_cache, kv_cache)
+        return x
 
 class Model(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.enable_kv_cache = config.enable_kv_cache #boolean value
-        self.kv_cache = [(None,None)   for _ in range(self.config.n_layers)]
         self.embedding_layer = nn.Embedding(self.config.vocab_size, self.config.dim)
-        self.layers = nn.Sequential(*[AttentionLayer(self.config, i) for i in range(self.config.n_layers)])
+        self.layers = nn.Sequential(*[AttentionLayer(self.config) for _ in range(self.config.n_layers)])
         self.hnorm = RMSNorm(config)
         self.clf_head = nn.Linear(self.config.dim, self.config.vocab_size)
     
     def forward(self, x, y=None):
+        assert len(x.shape) == 2
         x = self.embedding_layer(x)
-        x, _, self.kv_cache = self.layers((x, self.enable_kv_cache, self.kv_cache))
-        x = self.hnorm(x)
-        x = self.clf_head(x)
-        # if self.enable_kv_cache:
-        #     return x, self.kv_cache
-        # else:
+        x = self.layers(x)
+        x = self.hnorm(x)        
+        x = self.clf_head(x)        
         return x
-        
+    
     def reset_kv_cache(self):
-        self.kv_cache = [(None,None)   for _ in range(self.config.n_layers)]
+        for layer in self.layers:
+            layer.mha.reset_kv_cache()
+            
+        
     
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
@@ -269,9 +265,3 @@ class Model(nn.Module):
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer
-
-        
-
-
-    
-

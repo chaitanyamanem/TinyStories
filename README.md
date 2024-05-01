@@ -51,5 +51,20 @@ The token generation speed not linearly incresed with number of GPUs due to comm
 
 2) KV chaching
 
-Still under experimantation, expected to post results by May 1st, 2024
+- Generate Function:
+    • Use `model.reset_kv_cache()` to reset the cache for every trajectory.
+    • The `prompt` variable stores only one token, which is the predicted token in the last iteration. In the first iteration, it stores multiple words or the complete initial prompt provided as input.
+    • As it takes only one token as input its time complexity reduces from `quadratic` to `linear`
+
+- Model Changes:
+    • Added the `reset_kv_cache` method in the Model class to reset the `kv_cache` in each multihead attention layer.
+    • Made several changes to the MultiHeadAttention to implement the KV cache:
+        ○ In the `__init__` method, introduced the `enable_kv_cache` boolean variable.
+        ○ Initialized an empty dictionary of `kv_cache`.
+        ○ Calculated the new token position based on the `kv_cache` size (if `kv_cache` is enabled).
+        ○ Added an extra argument to RoPE for the new token position. A non-zero value indicates KV cache, otherwise, normal mode.
+        ○ In RoPE, based on the KV cache mode or normal model, either one specific position parameter is taken or up to one position based on the prompt length.
+        ○ Once the positions are encoded, before proceeding to the attention step, `k` and `v` are concatenated with the cache, ensuring a maximum length of `config.seq_len`.
+        ○ Also, added the new `k` and `v` values to the `kv_cache` dictionary.
+- The most important change is to add the custom mask and set `is_causal` to false. The new mask does not mask anything.
 
