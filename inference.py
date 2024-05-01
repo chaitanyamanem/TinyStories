@@ -48,7 +48,32 @@ class Config:
         self.n_test_examples = args.n_test_examples        
         self.steps_to_serialize = args.steps_to_serialize
         self.rank = 0
-        self.enable_kv_cache = True
+
+class AverageMeter:
+    def __init__(self, name):
+        self.name = name
+        self.reset()
+
+    @torch.no_grad
+    def reset(self):
+        self.val = 0
+        self.sum = 0
+        self.count = 0
+        self.avg = 0
+
+    @torch.no_grad
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val
+        self.count += n
+        self.avg = int(self.sum / self.count)
+
+    def __str__(self):
+        return f"{self.name}: {self.avg}"
+    
+    @torch.no_grad
+    def value(self):
+        return self.avg  
 
 def get_tokenizer(config):
     tokenizer_model_path = os.path.join(config.tokenizer_path,f"tok_{config.vocab_size}.model")
@@ -75,26 +100,30 @@ def inference(dataloader, config):
     generation_config = {
         'padding_token': tokenizer.eos_id(),
         'bos_id': tokenizer.bos_id(),
-        'max_new_tokens': 700,
-        'temperature': 0.1,
-        'enable_kv_cache':False
+        'max_new_tokens': 200,
+        'temperature': 0.1
     }
     generated_tokens = []
     prompts = []
-    total_tokens_count = 0
+    
+    token_rate = AverageMeter(name="token_rate")
     #tqdm setup
     total_steps = len(dataloader)
     inference_bar = tqdm(total=total_steps, desc='Inference Step', position=0, disable = not rank == 0) 
-    start_time = datetime.now()
+    
 
     for i, data in enumerate(dataloader):
-        x = data["prompt"].to(local_rank)        
+        x = data["prompt"].to(local_rank)
+
+        start_time = datetime.now()        
         inputs, outputs, tokens_count = model.generate(x,generation_config)
+        duration = (datetime.now() - start_time).total_seconds()
+        token_rate.update(tokens_count, duration)
         generated_tokens += outputs
         prompts += inputs
-        total_tokens_count += tokens_count
-        tokens_rate = int(total_tokens_count / ((datetime.now() - start_time).total_seconds()))
-        inference_bar.write(f"Tokens generation speed GPU{local_rank}: {tokens_rate} / sec, Current batch ")
+        
+        
+        inference_bar.write(f"Tokens generation speed GPU{local_rank}: {token_rate.value()} / second and per process")
 
     
 
@@ -111,18 +140,14 @@ def inference(dataloader, config):
 
             ## reset token generation rate counters, and others
             generated_tokens = []
-            prompts = []
-            total_tokens_count = 0
-            start_time = datetime.now()
-
-            
+            prompts = []           
 
         inference_bar.update(1)
 
 
 def setup():
     # initialize the process group
-    dist.init_process_group(backend="gloo")
+    dist.init_process_group(backend="nccl")
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 def cleanup():
@@ -172,7 +197,3 @@ if __name__ == "__main__":
     run_time = datetime.now() - start_time
     logging.info(f"Total Execution duration: {run_time}")
       
-   
-
-
-
